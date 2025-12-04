@@ -1,0 +1,116 @@
+{
+  "name": "@mimir/core",
+  "version": "0.1.0",
+  "description": "Mimir Core - Multi-tenant SaaS infrastructure for React Router applications",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "import": "./dist/server.js"
+    },
+    "./auth": {
+      "types": "./dist/auth/index.d.ts",
+      "import": "./dist/auth/index.js"
+    },
+    "./auth/server": {
+      "types": "./dist/auth/server.d.ts",
+      "import": "./dist/auth/server.js"
+    },
+    "./permissions": {
+      "types": "./dist/permissions/index.d.ts",
+      "import": "./dist/permissions/index.js"
+    },
+    "./tenant": {
+      "types": "./dist/tenant/index.d.ts",
+      "import": "./dist/tenant/index.js"
+    },
+    "./tenant/server": {
+      "types": "./dist/tenant/server.d.ts",
+      "import": "./dist/tenant/server.js"
+    },
+    "./identity": {
+      "types": "./dist/identity/index.d.ts",
+      "import": "./dist/identity/index.js"
+    },
+    "./identity/server": {
+      "types": "./dist/identity/server.d.ts",
+      "import": "./dist/identity/server.js"
+    },
+    "./api-client": {
+      "types": "./dist/api-client/index.d.ts",
+      "import": "./dist/api-client/index.js"
+    },
+    "./api-client/server": {
+      "types": "./dist/api-client/server.d.ts",
+      "import": "./dist/api-client/server.js"
+    },
+    "./logging": {
+      "types": "./dist/logging/index.d.ts",
+      "import": "./dist/logging/index.js"
+    },
+    "./signalr": {
+      "types": "./dist/signalr/index.d.ts",
+      "import": "./dist/signalr/index.js"
+    },
+    "./query-client": {
+      "types": "./dist/query-client/index.d.ts",
+      "import": "./dist/query-client/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsdown",
+    "dev": "tsdown --watch",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --max-warnings 0",
+    "clean": "rimraf dist",
+    "prepublishOnly": "pnpm run build"
+  },
+  "peerDependencies": {
+    "react": ">=18.0.0",
+    "react-router": ">=7.0.0",
+    "@tanstack/react-query": ">=5.0.0"
+  },
+  "dependencies": {
+    "oauth4webapi": "^3.3.0",
+    "ioredis": "^5.4.1",
+    "zustand": "^5.0.2",
+    "@microsoft/signalr": "^9.0.0",
+    "axios": "^1.7.0",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^2.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.7.0",
+    "tsdown": "^0.9.0",
+    "rimraf": "^6.0.0",
+    "eslint": "^9.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com",
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eminuckan/mimir-core.git"
+  },
+  "author": "Muhammet Emin Üçkan <eminuckan@gmail.com>",
+  "license": "MIT",
+  "private": false
+}
+
