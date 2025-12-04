@@ -1,5 +1,5 @@
 {
-  "name": "@mimir/core",
+  "name": "@eminuckan/mimir-core",
   "version": "0.1.0",
   "description": "Mimir Core - Multi-tenant SaaS infrastructure for React Router applications",
   "type": "module",
@@ -109,8 +109,9 @@
     "type": "git",
     "url": "git+https://github.com/eminuckan/mimir-core.git"
   },
-  "author": "Muhammet Emin Üçkan <eminuckan@gmail.com>",
+  "author": "Muhammet Emin Uckan <eminuckan@gmail.com>",
   "license": "MIT",
   "private": false
 }
+
 
