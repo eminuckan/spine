@@ -20,7 +20,7 @@ export default defineConfig({
     'query-client/index': 'src/query-client/index.ts',
   },
   format: 'esm',
-  dts: true,
+  dts: false,
   clean: true,
   sourcemap: true,
   external: [

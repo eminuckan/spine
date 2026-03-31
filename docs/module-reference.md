@@ -149,8 +149,8 @@ Server entry point:
 Key server exports:
 
 - `createAPIConfigFactory`
-- `setupAxiosInterceptors`
-- `createEnhancedClient`
+- `createFetchMiddleware`
+- `createApiClient`
 
 ## Query Client
 

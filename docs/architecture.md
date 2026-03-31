@@ -130,7 +130,7 @@ Owns:
 - base URL and header composition
 - auth header injection
 - tenant header injection
-- Axios interceptors
+- fetch middleware
 - retry and error handling
 
 Does not own:

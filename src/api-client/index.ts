@@ -7,6 +7,9 @@
 // Types
 export type {
   APIConfig,
+  APIRequestConfig,
+  APIResponse,
+  APIClientError,
   CreateAPIConfigOptions,
   ProblemDetails,
   ValidationError,
@@ -16,7 +19,15 @@ export type {
   GetCurrentTenantFn,
   TokenRefreshResult,
   TokenRefreshFn,
+  FetchAPI,
+  FetchMiddleware,
+  FetchRequestContext,
+  FetchResponseContext,
+  FetchErrorContext,
+  EnhancedAPIClient,
 } from './types';
+
+export { isApiClientError } from './types';
 
 // Error Codes
 export { ErrorCodes } from './error-codes';

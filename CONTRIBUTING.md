@@ -28,7 +28,7 @@ pnpm lint
 | `src/tenant` | Tenant store, provider, cookie, and server helpers |
 | `src/identity` | Identity cache, client store, and provider |
 | `src/permissions` | Permission store, hooks, components, and server protection |
-| `src/api-client` | API config factory, Axios setup, and retry/error helpers |
+| `src/api-client` | API config factory, fetch middleware, and retry/error helpers |
 | `src/query-client` | TanStack Query defaults and utilities |
 | `src/signalr` | Realtime client primitives |
 | `src/logging` | Logging utilities |

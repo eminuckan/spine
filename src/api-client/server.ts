@@ -14,10 +14,10 @@ export {
   type APIConfigFactoryOptions,
 } from './api-config.server';
 
-// Axios Setup (server-only)
+// Fetch-native client setup (server-only)
 export { 
-  setupAxiosInterceptors, 
-  createEnhancedClient,
-  type AxiosSetupOptions,
-  type CreateEnhancedClientOptions,
-} from './axios-setup.server';
+  createFetchMiddleware,
+  createApiClient,
+  type FetchSetupOptions,
+  type CreateApiClientOptions,
+} from './fetch-client.server';

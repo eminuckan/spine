@@ -5,6 +5,7 @@
  */
 
 import type { AddressData, IdentityContextData, TenantMembership } from './types';
+import { isApiClientError } from '../api-client/types';
 import { logger } from '../logging';
 
 /**
@@ -57,13 +58,7 @@ export async function fetchIdentityContext(request: Request): Promise<IdentityCo
     logger.error('Failed to fetch identity context', error instanceof Error ? error : undefined);
 
     // Check if this is a CurrentUserMissing error
-    if (
-      error &&
-      typeof error === 'object' &&
-      'response' in error &&
-      (error as { response?: { status?: number; data?: { title?: string } } }).response?.status === 404 &&
-      (error as { response?: { data?: { title?: string } } }).response?.data?.title === 'CurrentUserMissing'
-    ) {
+    if (isApiClientError(error) && error.response?.status === 404 && error.problemDetails?.title === 'CurrentUserMissing') {
       logger.error('CurrentUserMissing error detected - session is invalid');
       const invalidSessionError = new Error('INVALID_SESSION');
       (invalidSessionError as Error & { isInvalidSession: boolean }).isInvalidSession = true;

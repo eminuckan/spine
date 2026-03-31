@@ -10,6 +10,7 @@ export interface APIConfig {
   accessToken?: string;
   headers: Record<string, string>;
   tenantId: string;
+  credentials?: RequestCredentials;
   baseOptions?: {
     timeout?: number;
   };
@@ -48,6 +49,70 @@ export interface RetryConfig {
   maxDelay?: number;
   retryCondition?: (error: unknown) => boolean;
 }
+
+export interface APIRequestConfig {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+}
+
+export interface APIResponse<T = unknown> {
+  data: T;
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+  raw?: Response;
+}
+
+export interface APIClientError<T = unknown> extends Error {
+  isApiClientError: true;
+  response?: APIResponse<T>;
+  config?: APIRequestConfig;
+  problemDetails?: ProblemDetails;
+  shouldLogout?: boolean;
+  originalError?: unknown;
+  cause?: unknown;
+}
+
+export function isApiClientError(error: unknown): error is APIClientError {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'isApiClientError' in error &&
+    (error as { isApiClientError?: boolean }).isApiClientError === true
+  );
+}
+
+export type FetchAPI = typeof fetch;
+
+export interface FetchRequestContext {
+  fetch: FetchAPI;
+  url: string;
+  init: RequestInit;
+}
+
+export interface FetchResponseContext extends FetchRequestContext {
+  response: Response;
+}
+
+export interface FetchErrorContext extends FetchRequestContext {
+  error: unknown;
+  response?: Response;
+}
+
+export interface FetchMiddleware {
+  pre?: (context: FetchRequestContext) => Promise<{ url: string; init: RequestInit } | void>;
+  post?: (context: FetchResponseContext) => Promise<Response | void>;
+  onError?: (context: FetchErrorContext) => Promise<Response | void>;
+}
+
+export type EnhancedAPIClient<T> = {
+  [K in keyof T]: T[K] extends (...args: infer A) => Promise<infer R>
+    ? K extends `${string}Raw`
+      ? T[K]
+      : (...args: A) => Promise<APIResponse<R>>
+    : T[K];
+};
 
 /**
  * API Logger interface for dependency injection (simplified)

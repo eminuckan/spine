@@ -46,7 +46,7 @@ Spine aims to be:
 | `@eminuckan/spine/identity` | Identity store/provider/types |
 | `@eminuckan/spine/identity/server` | Identity context cache and server orchestration |
 | `@eminuckan/spine/api-client` | Client-side API types and errors |
-| `@eminuckan/spine/api-client/server` | Server-side API config and Axios helpers |
+| `@eminuckan/spine/api-client/server` | Server-side API config and fetch helpers |
 | `@eminuckan/spine/permissions` | Client-side permission primitives |
 | `@eminuckan/spine/logging` | Logging primitives |
 | `@eminuckan/spine/query-client` | TanStack Query helpers |
@@ -60,7 +60,7 @@ Spine aims to be:
 - Server-side permission route protection configuration
 - Multi-tenant client state and server helpers
 - Identity context cache, fetch orchestration, and client store/provider
-- API client factory and Axios interceptor setup
+- API client factory and fetch middleware setup
 - TanStack Query client defaults and cache presets
 - SignalR client helpers
 - Logging primitives

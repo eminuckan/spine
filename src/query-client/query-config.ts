@@ -96,7 +96,7 @@ export function createQueryClient(config: QueryClientConfig = {}): QueryClient {
         staleTime,
         gcTime,
         retry: (failureCount, error) => {
-          // Don't retry 401 errors - they're handled by Axios interceptor
+          // Don't retry 401 errors - the fetch client handles refresh flows separately
           if (is401Error(error)) {
             logger?.debug?.('Query failed with 401, not retrying');
             return false;
