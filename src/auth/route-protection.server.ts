@@ -10,8 +10,14 @@ import type { ProtectionLevel, UserInfo } from './types';
 import { logger } from '../logging';
 import { createRedirectResponse } from '../http/response';
 
-// Token refresh threshold (5 minutes before expiry)
-const REFRESH_THRESHOLD = 5 * 60 * 1000;
+// Refresh shortly before expiry. Keep this below common 5-minute access-token
+// lifetimes so a freshly issued token does not refresh again immediately.
+const REFRESH_THRESHOLD = resolveRefreshThreshold();
+
+function resolveRefreshThreshold(): number {
+  const configured = Number(process.env.OIDC_REFRESH_THRESHOLD_MS);
+  return Number.isFinite(configured) && configured > 0 ? configured : 60_000;
+}
 
 /**
  * Check if token needs refresh
@@ -22,7 +28,7 @@ export async function shouldRefreshToken(request: Request): Promise<boolean> {
 
     if (!sessionData.refreshToken || sessionData.refreshToken.length === 0) {
       if (sessionData.expiresAt && Date.now() >= sessionData.expiresAt) {
-        logger.info('Token expired and no refresh token, forcing app-specific logout');
+        logger.info('Token expired and no refresh token, forcing local application logout');
         const { logout } = await import('./auth.server');
         const logoutRequest = await createAutomaticLogoutRequest(request, 'expired-no-refresh-token');
         throw await logout(logoutRequest);
@@ -79,7 +85,7 @@ async function autoRefreshTokens(request: Request): Promise<void> {
         logger.error('Auto-refresh failed', undefined, { error: result.error });
 
         if (result.shouldLogout) {
-          logger.error('Refresh token invalid, forcing app-specific logout');
+          logger.error('Refresh token invalid, forcing local application logout');
           const { logout } = await import('./auth.server');
           const logoutRequest = await createAutomaticLogoutRequest(request, 'refresh-failed');
           throw await logout(logoutRequest);
@@ -240,7 +246,7 @@ async function createAutomaticLogoutRequest(
 
   const logoutUrl = new URL(request.url);
   logoutUrl.pathname = '/auth/logout';
-  logoutUrl.searchParams.set('client_id_only', 'true');
+  logoutUrl.searchParams.set('logout', 'local');
 
   return new Request(logoutUrl.toString(), {
     headers: request.headers,

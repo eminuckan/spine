@@ -4,7 +4,7 @@
 
 /**
  * Application Type
- * Determines logout behavior and error handling
+ * Describes app UX shape for login/error handling.
  */
 export type ApplicationType =
   | 'no-landing-page'
@@ -13,6 +13,11 @@ export type ApplicationType =
   | 'tenant-app'
   | 'custom';
 
+export type OidcClientAuthMethod =
+  | 'none'
+  | 'client_secret_post'
+  | 'client_secret_basic';
+
 /**
  * OAuth Configuration
  */
@@ -20,34 +25,23 @@ export interface AuthConfig {
   authority: string;
   clientId: string;
   clientSecret?: string;
+  clientAuthMethod?: OidcClientAuthMethod;
   redirectUri: string;
   postLogoutRedirectUri?: string;
   scope: string;
   
   /**
-   * Application type - determines logout behavior
-   * - 'no-landing-page': No landing page, defaults to full SSO logout
-   * - 'landing-page': Has a landing page, defaults to app-specific logout
+   * Application type - determines landing/error handling only.
+   * Logout scope is request intent:
+   * - default `/auth/logout`: RP-Initiated Logout at the identity provider
+   * - `/auth/logout?logout=local`: application session cleanup only
+   *
+   * Aliases:
    * - 'dashboard': Legacy alias for 'no-landing-page'
    * - 'tenant-app': Legacy alias for 'landing-page'
-   * - 'custom': Use explicit ssoLogout setting
    * @default 'custom'
    */
   applicationType?: ApplicationType;
-  
-  /**
-   * Whether to perform full SSO logout (clear identity cookie) or app-specific logout
-   * - true: Full logout - clears identity cookie, revokes all tokens
-   * - false: App-specific logout - keeps identity cookie, revokes only this app's tokens
-   * 
-   * If not set, determined by applicationType:
-   * - 'no-landing-page': true (full logout)
-   * - 'landing-page': false (app-specific)
-   * - 'dashboard': true (legacy alias)
-   * - 'tenant-app': false (legacy alias)
-   * - 'custom': false (default)
-   */
-  ssoLogout?: boolean;
   
   /**
    * Whether the application has a landing page
@@ -108,6 +102,8 @@ export interface OAuthState {
   codeVerifier: string;
   nonce?: string;
   returnUrl?: string;
+  /** Keycloak application initiated action requested for this authorization flow. */
+  kcAction?: string;
   createdAt: number;
 }
 
@@ -115,13 +111,51 @@ export interface OAuthState {
  * Session Data stored in Redis
  */
 export interface SessionData {
+  sessionId?: string;
   userId?: string;
   accessToken?: string;
   refreshToken?: string;
   idToken?: string;
   expiresAt?: number;
+  issuer?: string;
+  sid?: string;
+  sessionState?: string;
+  clientId?: string;
+  ipAddress?: string;
+  userAgent?: string;
   user?: UserInfo;
+  createdAt?: number;
   lastActivity?: number;
+}
+
+export interface AuthSessionSummary {
+  sessionId: string;
+  userId?: string;
+  email?: string;
+  name?: string;
+  issuer?: string;
+  sid?: string;
+  sessionState?: string;
+  clientId?: string;
+  ipAddress?: string;
+  userAgent?: string;
+  createdAt?: number;
+  lastActivity?: number;
+  expiresAt?: number;
+  isCurrent?: boolean;
+}
+
+export interface BackChannelLogoutResult {
+  destroyedSessions: number;
+  issuer?: string;
+  subject?: string;
+  sid?: string;
+}
+
+export interface FrontChannelLogoutResult {
+  destroyedSessions: number;
+  issuer?: string;
+  sid?: string;
 }
 
 /**
@@ -168,8 +202,25 @@ export type ProtectedLoaderFn<T> = (user?: UserInfo) => Promise<T> | T;
 export interface LoginOptions {
   /** Return URL after successful login */
   returnUrl?: string;
-  /** OAuth prompt parameter (none, login, consent, select_account) */
-  prompt?: 'none' | 'login' | 'consent' | 'select_account';
+  /** OAuth prompt parameter (none, login, consent, select_account, create) */
+  prompt?: 'none' | 'login' | 'consent' | 'select_account' | 'create';
+  /**
+   * Additional authorization request parameters.
+   *
+   * Use this for safe provider hints: `login_hint`, `ui_locales`,
+   * `acr_values`, `kc_idp_hint`, or custom `uf_` theme context parameters.
+   * Security-sensitive protocol parameters such as state, nonce, redirect_uri,
+   * scope, PKCE, prompt, and kc_action are managed by Spine and cannot be
+   * overridden.
+   */
+  extraAuthParams?: Record<string, string | number | boolean | null | undefined>;
+  /**
+   * Keycloak application initiated action.
+   *
+   * Example: `webauthn-register` starts native passkey registration.
+   * This is Keycloak-specific and is ignored by non-Keycloak providers.
+   */
+  kcAction?: string;
 }
 
 /**

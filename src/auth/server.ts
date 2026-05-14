@@ -11,11 +11,15 @@ export * from './route-protection.server';
 export * from './token-refresh.server';
 export type {
   ApplicationType,
+  AuthSessionSummary,
   AuthClaimMapping,
   AuthConfig,
   AuthError,
+  BackChannelLogoutResult,
+  FrontChannelLogoutResult,
   LoginOptions,
   OAuthState,
+  OidcClientAuthMethod,
   ProtectedLoaderFn,
   ProtectionLevel,
   SessionData,

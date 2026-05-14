@@ -1,5 +1,5 @@
 /**
- * OAuth2/OIDC Authentication Server Module
+ * OpenID Connect Authentication Server Module
  *
  * Handles:
  * - Login flow (PKCE)
@@ -9,7 +9,8 @@
  * - Session management
  */
 
-import * as oauth from 'oauth4webapi';
+import * as oidc from 'openid-client';
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 import {
   createAuthSession,
@@ -17,6 +18,10 @@ import {
   updateAuthSession,
   destroyAuthSession,
   isSessionValid,
+  listAuthSessionDataForUser,
+  destroyAuthSessionsByIdentitySession,
+  destroyAuthSessionsBySid,
+  destroyAuthSessionsForUser,
   createOAuthState,
   getOAuthState,
   deleteOAuthState,
@@ -31,36 +36,20 @@ import type {
   TokenRefreshResult,
   LoginOptions,
   ApplicationType,
+  OidcClientAuthMethod,
+  BackChannelLogoutResult,
+  FrontChannelLogoutResult,
   AuthError
 } from './types';
 import { logger } from '../logging';
 import { createRedirectResponse } from '../http/response';
 
+type OidcTokenResponse = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
+type LogoutScope = 'identity' | 'local' | 'all';
+
 // ============================================================================
 // Configuration
 // ============================================================================
-
-/**
- * Get effective SSO logout setting based on config
- */
-function getEffectiveSsoLogout(config: AuthConfig): boolean {
-  // Explicit setting takes precedence
-  if (config.ssoLogout !== undefined) {
-    return config.ssoLogout;
-  }
-  
-  // Determine by application type
-  switch (config.applicationType) {
-    case 'no-landing-page':
-    case 'dashboard':
-      return true; // Dashboard needs full logout (no landing page)
-    case 'landing-page':
-    case 'tenant-app':
-      return false; // Tenant app uses app-specific logout
-    default:
-      return false; // Default to app-specific logout
-  }
-}
 
 /**
  * Get effective hasLandingPage setting based on config
@@ -113,11 +102,11 @@ function createAuthConfig(): AuthConfig {
     applicationType = 'tenant-app';
   }
 
-  // Parse boolean env vars
-  const ssoLogout = process.env.OIDC_SSO_LOGOUT !== undefined
-    ? process.env.OIDC_SSO_LOGOUT === 'true'
-    : undefined;
-    
+  const clientAuthMethod = parseOidcClientAuthMethod(
+    process.env.OIDC_CLIENT_AUTH_METHOD,
+    process.env.OIDC_CLIENT_SECRET ? 'client_secret_post' : 'none'
+  );
+
   const hasLandingPage = process.env.OIDC_HAS_LANDING_PAGE !== undefined
     ? process.env.OIDC_HAS_LANDING_PAGE === 'true'
     : undefined;
@@ -126,13 +115,36 @@ function createAuthConfig(): AuthConfig {
     authority: requiredEnvVars.authority!,
     clientId: requiredEnvVars.clientId!,
     clientSecret: process.env.OIDC_CLIENT_SECRET,
+    clientAuthMethod,
     redirectUri: requiredEnvVars.redirectUri!,
-    scope: process.env.OIDC_SCOPE || 'openid offline_access api',
+    scope: process.env.OIDC_SCOPE || 'openid profile email api',
     postLogoutRedirectUri: process.env.OIDC_POST_LOGOUT_REDIRECT_URI,
     applicationType,
-    ssoLogout,
     hasLandingPage,
   };
+}
+
+function parseOidcClientAuthMethod(
+  value: string | undefined,
+  fallback: OidcClientAuthMethod
+): OidcClientAuthMethod {
+  const normalized = value?.trim().toLowerCase();
+
+  switch (normalized) {
+    case undefined:
+    case '':
+      return fallback;
+    case 'none':
+      return 'none';
+    case 'client_secret_post':
+    case 'post':
+      return 'client_secret_post';
+    case 'client_secret_basic':
+    case 'basic':
+      return 'client_secret_basic';
+    default:
+      throw new Error(`Unsupported OIDC_CLIENT_AUTH_METHOD: ${value}`);
+  }
 }
 
 let OIDC_CONFIG: AuthConfig | null = null;
@@ -149,67 +161,493 @@ function getAuthConfig(): AuthConfig {
 // ============================================================================
 
 let authServerCache: {
-  authorizationServer: oauth.AuthorizationServer;
-  client: oauth.Client;
+  configuration: oidc.Configuration;
   cachedAt: number;
 } | null = null;
 
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
+const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
+const RESERVED_AUTHORIZATION_PARAMETER_NAMES = new Set([
+  'client_id',
+  'code_challenge',
+  'code_challenge_method',
+  'kc_action',
+  'nonce',
+  'prompt',
+  'redirect_uri',
+  'response_mode',
+  'response_type',
+  'scope',
+  'state',
+]);
+const ALLOWED_EXTRA_AUTHORIZATION_PARAMETER_NAMES = new Set([
+  'acr_values',
+  'kc_idp_hint',
+  'login_hint',
+  'ui_locales',
+]);
+
+function normalizeIssuer(value: string | undefined): string | null {
+  const normalized = value?.trim().replace(/\/+$/, '');
+  return normalized && normalized.length > 0 ? normalized : null;
+}
+
+function getJwtClaims(token: string | undefined): Record<string, unknown> | null {
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const [, payload] = token.split('.');
+    if (!payload) {
+      return null;
+    }
+
+    return JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+function getJwtIssuer(token: string | undefined): string | null {
+  const issuer = getJwtClaims(token)?.iss;
+  return typeof issuer === 'string' ? normalizeIssuer(issuer) : null;
+}
+
+function canUseIdTokenHint(idToken: string | undefined, expectedIssuer: string): boolean {
+  if (!idToken) {
+    return false;
+  }
+
+  const tokenIssuer = getJwtIssuer(idToken);
+  return tokenIssuer !== null && tokenIssuer === normalizeIssuer(expectedIssuer);
+}
+
+function sanitizeLogoutReturnUrl(returnUrl: string | null, request: Request): string | null {
+  if (!returnUrl) {
+    return null;
+  }
+
+  try {
+    const requestUrl = new URL(request.url);
+    const decodedReturnUrl = decodeURIComponent(returnUrl);
+
+    if (decodedReturnUrl.startsWith('/') && !decodedReturnUrl.startsWith('//')) {
+      return isAuthLoopPath(decodedReturnUrl) ? null : decodedReturnUrl;
+    }
+
+    const candidateUrl = new URL(decodedReturnUrl);
+    if (candidateUrl.origin !== requestUrl.origin) {
+      return null;
+    }
+
+    const sameOriginPath = `${candidateUrl.pathname}${candidateUrl.search}${candidateUrl.hash}`;
+    return isAuthLoopPath(sameOriginPath) ? null : sameOriginPath;
+  } catch {
+    return null;
+  }
+}
+
+function appendApplicationInitiatedActionResult(
+  returnUrl: string,
+  action: string | null | undefined,
+  status: string | null | undefined
+): string {
+  if (!action && !status) {
+    return returnUrl;
+  }
+
+  try {
+    const isRelative = returnUrl.startsWith('/') && !returnUrl.startsWith('//');
+    const url = new URL(returnUrl, isRelative ? 'http://spine.local' : undefined);
+
+    if (action) {
+      url.searchParams.set('kc_action', action);
+    }
+
+    if (status) {
+      url.searchParams.set('kc_action_status', status);
+    }
+
+    return isRelative ? `${url.pathname}${url.search}${url.hash}` : url.toString();
+  } catch {
+    const params = new URLSearchParams();
+    if (action) params.set('kc_action', action);
+    if (status) params.set('kc_action_status', status);
+    const separator = returnUrl.includes('?') ? '&' : '?';
+    return `${returnUrl}${separator}${params.toString()}`;
+  }
+}
+
+function isAuthLoopPath(path: string): boolean {
+  const normalized = path.split('#')[0].split('?')[0].replace(/\/+$/, '') || '/';
+  return normalized === '/auth/logout' || normalized === '/auth/callback';
+}
+
+function isLocalInsecureIssuer(authority: string): boolean {
+  try {
+    const issuer = new URL(authority);
+    return (
+      issuer.protocol === 'http:' &&
+      ['localhost', '127.0.0.1', '::1', '[::1]'].includes(issuer.hostname)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function shouldAllowInsecureOidcRequests(authority: string): boolean {
+  if (process.env.NODE_ENV === 'production') {
+    return false;
+  }
+
+  if (process.env.OIDC_ALLOW_INSECURE_REQUESTS === 'true') {
+    return true;
+  }
+
+  return isLocalInsecureIssuer(authority);
+}
+
+function getDiscoveryOptions(): oidc.DiscoveryRequestOptions {
+  const config = getAuthConfig();
+
+  return shouldAllowInsecureOidcRequests(config.authority)
+    ? { algorithm: 'oidc', execute: [oidc.allowInsecureRequests] }
+    : { algorithm: 'oidc' };
+}
+
+function getClientMetadata(config: AuthConfig): string | undefined {
+  return config.clientAuthMethod === 'none' ? undefined : config.clientSecret;
+}
+
+function sanitizeExtraAuthorizationParameters(
+  params: LoginOptions['extraAuthParams'] | undefined
+): Record<string, string> {
+  if (!params) {
+    return {};
+  }
+
+  const sanitized: Record<string, string> = {};
+
+  for (const [key, value] of Object.entries(params)) {
+    const normalizedKey = key.trim();
+    if (
+      normalizedKey.length === 0 ||
+      RESERVED_AUTHORIZATION_PARAMETER_NAMES.has(normalizedKey.toLowerCase()) ||
+      !isAllowedExtraAuthorizationParameter(normalizedKey) ||
+      value === null ||
+      value === undefined
+    ) {
+      continue;
+    }
+
+    const normalizedValue = String(value).trim();
+    if (normalizedValue.length === 0) {
+      continue;
+    }
+
+    sanitized[normalizedKey] = normalizedValue;
+  }
+
+  return sanitized;
+}
+
+function isAllowedExtraAuthorizationParameter(key: string): boolean {
+  const normalized = key.toLowerCase();
+  return (
+    ALLOWED_EXTRA_AUTHORIZATION_PARAMETER_NAMES.has(normalized) ||
+    normalized.startsWith('uf_')
+  );
+}
+
+function buildAuthorizationState(baseState: string, extraParams: Record<string, string>): string {
+  const uiContext = buildPublicAuthorizationUiContext(extraParams);
+  if (!uiContext) {
+    return baseState;
+  }
+
+  return `${baseState}.${Buffer.from(JSON.stringify(uiContext), 'utf8').toString('base64url')}`;
+}
+
+function buildPublicAuthorizationUiContext(
+  extraParams: Record<string, string>
+): Record<string, string> | null {
+  const inviteKind = extraParams.uf_invite;
+  if (inviteKind !== 'organization') {
+    return null;
+  }
+
+  const context: Record<string, string> = {
+    uf_invite: inviteKind,
+  };
+
+  if (extraParams.uf_invite_mode) {
+    context.uf_invite_mode = extraParams.uf_invite_mode;
+  }
+
+  if (extraParams.login_hint) {
+    context.login_hint = extraParams.login_hint;
+  }
+
+  return context;
+}
+
+function getClientAuthentication(config: AuthConfig): oidc.ClientAuth {
+  switch (config.clientAuthMethod) {
+    case 'client_secret_basic':
+      if (!config.clientSecret) {
+        throw new Error('OIDC_CLIENT_SECRET is required for client_secret_basic authentication');
+      }
+
+      return oidc.ClientSecretBasic(config.clientSecret);
+    case 'client_secret_post':
+      if (!config.clientSecret) {
+        throw new Error('OIDC_CLIENT_SECRET is required for client_secret_post authentication');
+      }
+
+      return oidc.ClientSecretPost(config.clientSecret);
+    case 'none':
+    default:
+      return oidc.None();
+  }
+}
+
+function getOAuthErrorMessage(error: unknown): string {
+  if (error instanceof oidc.ResponseBodyError) {
+    return error.error_description || error.error || error.message;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return 'Unknown error';
+}
+
+function shouldLogoutAfterOAuthError(error: unknown): boolean {
+  if (error instanceof oidc.ResponseBodyError) {
+    return (
+      error.status === 400 ||
+      error.status === 401 ||
+      error.error === 'invalid_grant' ||
+      error.error === 'invalid_token'
+    );
+  }
+
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  return message.includes('invalid_grant') || message.includes('invalid_token') || message.includes('unauthorized');
+}
+
+function getLogoutScope(url: URL): LogoutScope {
+  const requestedScope =
+    url.searchParams.get('logout') ??
+    url.searchParams.get('logout_scope') ??
+    url.searchParams.get('scope');
+  const normalized = requestedScope?.trim().toLowerCase();
+
+  if (
+    normalized === 'local' ||
+    normalized === 'application' ||
+    normalized === 'app' ||
+    normalized === 'current-device'
+  ) {
+    return 'local';
+  }
+
+  if (
+    normalized === 'all' ||
+    normalized === 'all-local' ||
+    normalized === 'all-devices' ||
+    normalized === 'everywhere'
+  ) {
+    return 'all';
+  }
+
+  if (url.searchParams.get('local_only') === 'true' || url.searchParams.get('client_id_only') === 'true') {
+    return 'local';
+  }
+
+  return 'identity';
+}
+
+function getAbsoluteRedirectUrl(request: Request, redirectUrl: string): string {
+  if (/^https?:\/\//i.test(redirectUrl)) {
+    return redirectUrl;
+  }
+
+  return new URL(redirectUrl, new URL(request.url).origin).toString();
+}
+
+async function revokeTokenBestEffort(
+  configuration: oidc.Configuration,
+  token: string | undefined,
+  tokenTypeHint: 'access_token' | 'refresh_token'
+): Promise<void> {
+  if (!token) {
+    return;
+  }
+
+  try {
+    await oidc.tokenRevocation(configuration, token, {
+      token_type_hint: tokenTypeHint,
+    });
+  } catch (error) {
+    logger.warn('OIDC token revocation failed', {
+      tokenTypeHint,
+      error: getOAuthErrorMessage(error),
+    });
+  }
+}
+
+async function revokeSessionTokensBestEffort(sessionData: SessionData): Promise<void> {
+  if (!sessionData.refreshToken && !sessionData.accessToken) {
+    return;
+  }
+
+  try {
+    const configuration = await getOAuthConfig();
+    await revokeTokenBestEffort(configuration, sessionData.refreshToken, 'refresh_token');
+    await revokeTokenBestEffort(configuration, sessionData.accessToken, 'access_token');
+  } catch (error) {
+    logger.warn('Skipping OIDC token revocation because provider configuration is unavailable', {
+      error: getOAuthErrorMessage(error),
+    });
+  }
+}
+
+async function revokeAndDestroyAllUserSessionsBestEffort(userId: string): Promise<number> {
+  const sessions = await listAuthSessionDataForUser(userId);
+
+  try {
+    const configuration = await getOAuthConfig();
+    for (const { data } of sessions) {
+      await revokeTokenBestEffort(configuration, data.refreshToken, 'refresh_token');
+      await revokeTokenBestEffort(configuration, data.accessToken, 'access_token');
+    }
+  } catch (error) {
+    logger.warn('Skipping all-session token revocation because provider configuration is unavailable', {
+      error: getOAuthErrorMessage(error),
+    });
+  }
+
+  return await destroyAuthSessionsForUser(userId);
+}
+
+function getClaimsFromTokenResponse(tokenResult: OidcTokenResponse): Record<string, unknown> {
+  const claims = tokenResult.claims();
+
+  if (claims) {
+    return claims as Record<string, unknown>;
+  }
+
+  return getJwtClaims(tokenResult.id_token) ?? {};
+}
 
 /**
- * Get OAuth configuration with caching
+ * Get OIDC configuration with caching.
  */
-async function getOAuthConfig(): Promise<{
-  authorizationServer: oauth.AuthorizationServer;
-  client: oauth.Client;
-}> {
+async function getOAuthConfig(): Promise<oidc.Configuration> {
   const config = getAuthConfig();
   const now = Date.now();
 
   if (authServerCache && now - authServerCache.cachedAt < CACHE_TTL) {
-    return {
-      authorizationServer: authServerCache.authorizationServer,
-      client: authServerCache.client,
-    };
+    return authServerCache.configuration;
   }
 
   try {
-    const issuer = new URL(config.authority);
-    const discoveryResponse = await oauth.discoveryRequest(issuer, {
-      algorithm: 'oidc',
-    });
-
-    if (!discoveryResponse.ok) {
-      const errorText = await discoveryResponse.text().catch(() => 'Unable to read response');
-      logger.error('OAuth discovery error', undefined, { errorText });
-      throw new Error(`OAuth discovery failed with status ${discoveryResponse.status}`);
-    }
-
-    const authorizationServer = await oauth.processDiscoveryResponse(issuer, discoveryResponse);
-
-    const client: oauth.Client = {
-      client_id: config.clientId,
-    };
+    const configuration = await oidc.discovery(
+      new URL(config.authority),
+      config.clientId,
+      getClientMetadata(config),
+      getClientAuthentication(config),
+      getDiscoveryOptions()
+    );
 
     authServerCache = {
-      authorizationServer,
-      client,
+      configuration,
       cachedAt: now,
     };
 
-    logger.info('OAuth discovery completed successfully');
-    return { authorizationServer, client };
+    logger.info('OIDC discovery completed successfully', {
+      issuer: configuration.serverMetadata().issuer,
+      clientId: config.clientId,
+      clientAuthMethod: config.clientAuthMethod,
+    });
+    return configuration;
   } catch (error) {
-    logger.error('OAuth discovery failed', error instanceof Error ? error : undefined);
-    throw new Error(`OAuth discovery failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    logger.error('OIDC discovery failed', error instanceof Error ? error : undefined, {
+      authority: config.authority,
+      clientId: config.clientId,
+    });
+    throw new Error(`OIDC discovery failed: ${getOAuthErrorMessage(error)}`);
   }
 }
 
-/**
- * Get client authentication method (None for public client with PKCE)
- */
-function getClientAuth(): oauth.ClientAuth {
-  return oauth.None();
+function getJwks(jwksUri: string): ReturnType<typeof createRemoteJWKSet> {
+  const cachedJwks = jwksCache.get(jwksUri);
+  if (cachedJwks) {
+    return cachedJwks;
+  }
+
+  const jwks = createRemoteJWKSet(new URL(jwksUri));
+  jwksCache.set(jwksUri, jwks);
+  return jwks;
+}
+
+async function getLogoutTokenFromRequest(request: Request): Promise<string | null> {
+  const contentType = request.headers.get('content-type') ?? '';
+
+  if (contentType.includes('application/json')) {
+    const body = await request.json().catch(() => null) as { logout_token?: unknown } | null;
+    return typeof body?.logout_token === 'string' ? body.logout_token : null;
+  }
+
+  const formData = await request.formData().catch(() => null);
+  const logoutToken = formData?.get('logout_token');
+  return typeof logoutToken === 'string' ? logoutToken : null;
+}
+
+function validateBackChannelLogoutClaims(payload: Record<string, unknown>, clientId: string): {
+  issuer?: string;
+  subject?: string;
+  sid?: string;
+} {
+  const events = payload.events;
+  const hasBackChannelEvent =
+    events &&
+    typeof events === 'object' &&
+    !Array.isArray(events) &&
+    'http://schemas.openid.net/event/backchannel-logout' in events;
+
+  if (!hasBackChannelEvent) {
+    throw new Error('Invalid back-channel logout token: missing back-channel logout event');
+  }
+
+  if ('nonce' in payload) {
+    throw new Error('Invalid back-channel logout token: nonce is not allowed');
+  }
+
+  const audience = payload.aud;
+  const hasClientAudience = Array.isArray(audience)
+    ? audience.includes(clientId)
+    : audience === clientId;
+
+  if (!hasClientAudience) {
+    throw new Error('Invalid back-channel logout token: audience mismatch');
+  }
+
+  const subject = typeof payload.sub === 'string' ? payload.sub : undefined;
+  const sid = typeof payload.sid === 'string' ? payload.sid : undefined;
+
+  if (!subject && !sid) {
+    throw new Error('Invalid back-channel logout token: subject or sid is required');
+  }
+
+  return {
+    issuer: typeof payload.iss === 'string' ? payload.iss : undefined,
+    subject,
+    sid,
+  };
 }
 
 // ============================================================================
@@ -478,7 +916,7 @@ export function extractUserInfo(claims: Record<string, unknown>): {
  * Create session data from token result
  */
 async function createSessionData(
-  tokenResult: oauth.TokenEndpointResponse,
+  tokenResult: OidcTokenResponse,
   claims: Record<string, unknown>
 ): Promise<Partial<SessionData>> {
   const claimMapping = getConfiguredAuthClaimMapping();
@@ -497,6 +935,8 @@ async function createSessionData(
   const expiresAt = tokenResult.expires_in
     ? Date.now() + tokenResult.expires_in * 1000
     : undefined;
+  const now = Date.now();
+  const sessionState = (tokenResult as Record<string, unknown>).session_state;
 
   return {
     userId: baseUser.sub,
@@ -504,8 +944,13 @@ async function createSessionData(
     refreshToken: tokenResult.refresh_token,
     idToken: tokenResult.id_token,
     expiresAt,
+    issuer: getStringClaim(claims, ['iss']),
+    sid: getStringClaim(claims, ['sid']),
+    sessionState: typeof sessionState === 'string' ? sessionState : undefined,
+    clientId: getAuthConfig().clientId,
     user: baseUser,
-    lastActivity: Date.now(),
+    createdAt: now,
+    lastActivity: now,
   };
 }
 
@@ -614,15 +1059,19 @@ export async function login(
       return createRedirectResponse(baseUrl, { headers });
     }
 
-    const { authorizationServer, client } = await getOAuthConfig();
+    const oidcConfig = await getOAuthConfig();
 
     // Generate PKCE challenge
-    const codeVerifier = oauth.generateRandomCodeVerifier();
-    const codeChallenge = await oauth.calculatePKCECodeChallenge(codeVerifier);
+    const codeVerifier = oidc.randomPKCECodeVerifier();
+    const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier);
 
-    // Generate secure state and nonce
-    const state = oauth.generateRandomState();
-    const nonce = oauth.generateRandomNonce();
+    const extraAuthParams = sanitizeExtraAuthorizationParameters(options.extraAuthParams);
+
+    // Generate secure state and nonce. The state may carry a non-secret UI
+    // hint for Keycloak themes, but callback validation still compares the
+    // exact value stored server-side.
+    const state = buildAuthorizationState(oidc.randomState(), extraAuthParams);
+    const nonce = oidc.randomNonce();
 
     // Create OAuth state object
     const oauthState: OAuthState = {
@@ -630,46 +1079,54 @@ export async function login(
       codeVerifier,
       nonce,
       returnUrl: options.returnUrl,
+      kcAction: options.kcAction,
       createdAt: Date.now(),
     };
 
-    logger.info('Creating OAuth state', { returnUrl: options.returnUrl, prompt: options.prompt });
+    logger.info('Creating OAuth state', {
+      returnUrl: options.returnUrl,
+      prompt: options.prompt,
+      kcAction: options.kcAction,
+      extraAuthParamKeys: Object.keys(extraAuthParams),
+    });
 
     // Store OAuth state in Redis
     const stateId = await createOAuthState(oauthState);
 
-    // Build authorization URL
-    const authorizationUrl = new URL(authorizationServer.authorization_endpoint!);
-    authorizationUrl.searchParams.set('client_id', client.client_id);
-    authorizationUrl.searchParams.set('redirect_uri', config.redirectUri);
-    authorizationUrl.searchParams.set('response_type', 'code');
-    authorizationUrl.searchParams.set('scope', config.scope);
-    authorizationUrl.searchParams.set('state', state);
-    authorizationUrl.searchParams.set('code_challenge', codeChallenge);
-    authorizationUrl.searchParams.set('code_challenge_method', 'S256');
-    authorizationUrl.searchParams.set('nonce', nonce);
-    
-    // Add prompt parameter if specified
+    const authorizationParameters: Record<string, string> = {
+      redirect_uri: config.redirectUri,
+      scope: config.scope,
+      state,
+      nonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      ...extraAuthParams,
+    };
+
     if (options.prompt) {
-      authorizationUrl.searchParams.set('prompt', options.prompt);
+      authorizationParameters.prompt = options.prompt;
     }
+
+    if (options.kcAction) {
+      authorizationParameters.kc_action = options.kcAction;
+    }
+
+    const authorizationUrl = oidc.buildAuthorizationUrl(oidcConfig, authorizationParameters);
 
     // Store stateId in cookie for callback (app-specific to prevent conflicts)
     const headers = new Headers();
     headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=${stateId}; Path=/; HttpOnly; SameSite=Lax; Max-Age=600`);
 
-    // DEBUG: Log full authorization URL and config
-    logger.info('🔍 DEBUG: OAuth login config', {
+    logger.info('OIDC authorization flow initiated', {
       clientId: config.clientId,
       redirectUri: config.redirectUri,
-      postLogoutRedirectUri: config.postLogoutRedirectUri,
       scope: config.scope,
-      authority: config.authority,
-      authorizationEndpoint: authorizationServer.authorization_endpoint,
-      fullAuthUrl: authorizationUrl.toString()
+      authorizationEndpoint: oidcConfig.serverMetadata().authorization_endpoint,
+      stateId,
+      prompt: options.prompt,
+      kcAction: options.kcAction,
     });
 
-    logger.info('OAuth authorization flow initiated', { state, stateId, prompt: options.prompt });
     return createRedirectResponse(authorizationUrl.toString(), { headers });
   } catch (error) {
     logger.error('Failed to initiate OAuth login', error instanceof Error ? error : undefined);
@@ -698,22 +1155,55 @@ export async function handleCallback(request: Request): Promise<Response> {
     const state = url.searchParams.get('state');
     const error = url.searchParams.get('error');
     const errorDescription = url.searchParams.get('error_description');
+    const kcAction = url.searchParams.get('kc_action');
+    const kcActionStatus = url.searchParams.get('kc_action_status');
 
-    // DEBUG: Log callback URL and params
-    logger.info('🔍 DEBUG: OAuth callback received', {
-      fullUrl: url.toString(),
-      origin: url.origin,
-      pathname: url.pathname,
+    logger.info('OIDC callback received', {
       hasCode: !!code,
       hasState: !!state,
       error,
       errorDescription,
+      kcAction,
+      kcActionStatus,
       clientId: config.clientId,
       redirectUri: config.redirectUri
     });
 
     // Handle OAuth errors
     if (error) {
+      if (kcActionStatus && state) {
+        const cookies = request.headers.get('Cookie');
+        const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
+        const cookieMatch = cookies?.match(oauthStateRegex);
+        const stateId = cookieMatch?.[1];
+
+        if (stateId) {
+          const oauthState = await getOAuthState(stateId);
+          const stateAge = oauthState ? Date.now() - oauthState.createdAt : Number.POSITIVE_INFINITY;
+
+          if (oauthState && oauthState.state === state && stateAge <= 10 * 60 * 1000) {
+            await deleteOAuthState(stateId);
+            const headers = new Headers();
+            headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+
+            const redirectUrl = appendApplicationInitiatedActionResult(
+              oauthState.returnUrl || '/',
+              kcAction || oauthState.kcAction,
+              kcActionStatus
+            );
+
+            logger.info('Application initiated action returned with OAuth error', {
+              error,
+              errorDescription,
+              kcAction: kcAction || oauthState.kcAction,
+              kcActionStatus,
+            });
+
+            return createRedirectResponse(redirectUrl, { headers });
+          }
+        }
+      }
+
       logger.error('OAuth callback error', undefined, { 
         error, 
         errorDescription,
@@ -781,11 +1271,6 @@ export async function handleCallback(request: Request): Promise<Response> {
       return createRedirectResponse(baseUrl, { headers });
     }
 
-    // Validate required parameters
-    if (!code || !state) {
-      throw new Error('Missing required callback parameters');
-    }
-
     // Get stateId from cookie (app-specific)
     const cookies = request.headers.get('Cookie');
     const oauthStateRegex = new RegExp(`${OAUTH_STATE_COOKIE}=([^;]+)`);
@@ -803,6 +1288,10 @@ export async function handleCallback(request: Request): Promise<Response> {
       throw new Error('No OAuth state found - state may have expired');
     }
 
+    if (!state) {
+      throw new Error('Missing required callback state parameter');
+    }
+
     if (oauthState.state !== state) {
       throw new Error(`OAuth state mismatch`);
     }
@@ -813,63 +1302,42 @@ export async function handleCallback(request: Request): Promise<Response> {
       throw new Error('OAuth state expired');
     }
 
-    const { authorizationServer, client } = await getOAuthConfig();
-    const clientAuth = getClientAuth();
+    if (!code) {
+      if (kcActionStatus) {
+        await deleteOAuthState(stateId);
+        const headers = new Headers();
+        headers.append('Set-Cookie', `${OAUTH_STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+
+        const redirectUrl = appendApplicationInitiatedActionResult(
+          oauthState.returnUrl || '/',
+          kcAction || oauthState.kcAction,
+          kcActionStatus
+        );
+
+        logger.info('Application initiated action returned without authorization code', {
+          kcAction: kcAction || oauthState.kcAction,
+          kcActionStatus,
+        });
+
+        return createRedirectResponse(redirectUrl, { headers });
+      }
+
+      throw new Error('Missing required callback code parameter');
+    }
 
     logger.info('Initiating token exchange');
 
-    // Validate authorization response
-    const currentUrl = new URL(request.url);
-    const callbackParameters = oauth.validateAuthResponse(
-      authorizationServer,
-      client,
-      currentUrl,
-      oauthState.state
-    );
-
-    // Exchange authorization code for tokens
-    const tokenEndpointResponse = await oauth.authorizationCodeGrantRequest(
-      authorizationServer,
-      client,
-      clientAuth,
-      callbackParameters,
-      config.redirectUri,
-      oauthState.codeVerifier
-    );
-
-    if (!tokenEndpointResponse.ok) {
-      const errorText = await tokenEndpointResponse.text().catch(() => 'Unable to read response');
-      logger.error('Token endpoint error', undefined, { errorText });
-      throw new Error('Token exchange failed');
-    }
-
-    // Process token response
-    const tokenResult = await oauth.processAuthorizationCodeResponse(
-      authorizationServer,
-      client,
-      tokenEndpointResponse,
-      { expectedNonce: oauthState.nonce }
-    );
+    const oidcConfig = await getOAuthConfig();
+    const tokenResult = await oidc.authorizationCodeGrant(oidcConfig, url, {
+      pkceCodeVerifier: oauthState.codeVerifier,
+      expectedState: oauthState.state,
+      expectedNonce: oauthState.nonce,
+      idTokenExpected: config.scope.split(/\s+/).includes('openid'),
+    });
 
     logger.info('Token exchange completed successfully');
 
-    // Extract claims from ID token
-    let claims: Record<string, unknown> = {};
-    if (tokenResult.id_token) {
-      try {
-        const payload = tokenResult.id_token.split('.')[1];
-        const base64 = payload.replace(/-/g, '+').replace(/_/g, '/');
-        const binaryString = atob(base64);
-        const bytes = new Uint8Array(binaryString.length);
-        for (let i = 0; i < binaryString.length; i++) {
-          bytes[i] = binaryString.charCodeAt(i);
-        }
-        claims = JSON.parse(new TextDecoder('utf-8').decode(bytes));
-      } catch (decodeError) {
-        logger.error('Failed to decode ID token', decodeError instanceof Error ? decodeError : undefined);
-        throw new Error('Invalid ID token received');
-      }
-    }
+    const claims = getClaimsFromTokenResponse(tokenResult);
 
     // Create session data
     const newSessionData = await createSessionData(tokenResult, claims);
@@ -887,7 +1355,11 @@ export async function handleCallback(request: Request): Promise<Response> {
     logger.info('OAuth callback processed successfully');
 
     // Redirect to return URL or default location
-    const redirectUrl = oauthState.returnUrl || '/';
+    const redirectUrl = appendApplicationInitiatedActionResult(
+      oauthState.returnUrl || '/',
+      kcAction || oauthState.kcAction,
+      kcActionStatus
+    );
     return createRedirectResponse(redirectUrl, { headers });
   } catch (error) {
     logger.error('OAuth callback failed', error instanceof Error ? error : undefined);
@@ -911,89 +1383,103 @@ export async function handleCallback(request: Request): Promise<Response> {
 }
 
 /**
- * Logout user
- * 
- * Backend uses id_token_hint to identify which tokens to revoke.
- * 
- * **Scenario 1: Full SSO Logout (Manual Sign Out)**
- * - Query param: sso_logout=true
- * - Result: Full logout + identity cookie cleared
- * - User must re-authenticate everywhere
- * 
- * **Scenario 2: Standard Logout (Automatic/Token Expired)**
- * - No sso_logout param
- * - Result: Tokens revoked based on id_token_hint
- * - Backend determines which tokens to revoke
- * 
- * Configuration:
- * - `OIDC_SSO_LOGOUT` env var ('true' | 'false') - default behavior
- * - Query param `sso_logout=true` - override for full logout
+ * Logout user.
+ *
+ * Default logout follows OIDC RP-Initiated Logout and ends the identity
+ * provider session. Automatic/session-expiry cleanup can request
+ * `/auth/logout?logout=local` to clear only this app's Redis session without
+ * bouncing the browser through the identity provider or revoking SSO tokens.
  */
 export async function logout(request: Request): Promise<Response> {
   try {
     const config = getAuthConfig();
     const url = new URL(request.url);
     
-    // Check for explicit sso_logout from query params
-    const ssoLogout = url.searchParams.get('sso_logout') === 'true' || getEffectiveSsoLogout(config);
-    const returnUrl = url.searchParams.get('returnUrl');
+    const logoutScope = getLogoutScope(url);
+    const returnUrl = sanitizeLogoutReturnUrl(url.searchParams.get('returnUrl'), request);
     
     logger.info('Logout initiated', { 
       clientId: config.clientId,
-      ssoLogout
+      logoutScope,
     });
     
     const sessionData = await getAuthSession(request);
     const idToken = sessionData.idToken;
 
-    // Destroy local session
-    const sessionHeaders = await destroyAuthSession(request);
+    if (logoutScope === 'local') {
+      // Local logout is RP-only cleanup. Tokens are server-side and become
+      // unreachable once the Redis session is destroyed; revoking the refresh
+      // token can also terminate the Keycloak SSO session for this user.
+      const headers = await destroyAuthSession(request);
+      const redirectUrl = returnUrl || '/';
+      const absoluteRedirectUrl = getAbsoluteRedirectUrl(request, redirectUrl);
+
+      headers.append('Set-Cookie', 'logout_return_url=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      logger.info('Local application logout completed', { redirectUrl: absoluteRedirectUrl });
+      return createRedirectResponse(absoluteRedirectUrl, { headers });
+    }
+
+    const sessionHeaders = new Headers();
+
+    if (logoutScope === 'all' && sessionData.userId) {
+      await revokeAndDestroyAllUserSessionsBestEffort(sessionData.userId);
+      sessionHeaders.append('Set-Cookie', 'logout_return_url=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
+      const expiredHeaders = await destroyAuthSession(request);
+      expiredHeaders.forEach((value, key) => sessionHeaders.append(key, value));
+    } else {
+      await revokeSessionTokensBestEffort(sessionData);
+      const expiredHeaders = await destroyAuthSession(request);
+      expiredHeaders.forEach((value, key) => sessionHeaders.append(key, value));
+    }
+
     const headers = new Headers(sessionHeaders);
 
-    // Store returnUrl in cookie if provided
+    // Store returnUrl in cookie if provided for the post-logout landing redirect.
     if (returnUrl) {
       headers.append(
         'Set-Cookie',
         `logout_return_url=${encodeURIComponent(returnUrl)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=300`
       );
+    } else {
+      headers.append('Set-Cookie', 'logout_return_url=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0');
     }
 
-    // Redirect to OAuth end_session_endpoint if available
-    if (idToken) {
-      try {
-        const { authorizationServer } = await getOAuthConfig();
-        if (authorizationServer.end_session_endpoint) {
-          const endSessionUrl = new URL(authorizationServer.end_session_endpoint);
-          
-          // Backend uses id_token_hint to identify which tokens to revoke
-          endSessionUrl.searchParams.set('id_token_hint', idToken);
-          
-          // Add sso_logout for full SSO logout (clears identity cookie)
-          if (ssoLogout) {
-            endSessionUrl.searchParams.set('sso_logout', 'true');
-            logger.info('Performing full SSO logout (identity cookie will be cleared)');
-          } else {
-            logger.info('Performing standard logout (tokens revoked based on id_token_hint)');
-          }
-          
-          // Add post_logout_redirect_uri if configured
-          if (config.postLogoutRedirectUri) {
-            endSessionUrl.searchParams.set('post_logout_redirect_uri', config.postLogoutRedirectUri);
-          }
-          
-          return createRedirectResponse(endSessionUrl.toString(), { headers });
-        }
-      } catch {
-        // Ignore OAuth logout errors
+    try {
+      const oidcConfig = await getOAuthConfig();
+      const serverMetadata = oidcConfig.serverMetadata();
+      const logoutParameters: Record<string, string> = {};
+      const expectedIssuer = serverMetadata.issuer ?? config.authority;
+
+      if (idToken && canUseIdTokenHint(idToken, expectedIssuer)) {
+        logoutParameters.id_token_hint = idToken;
+      } else if (idToken) {
+        logger.warn('Skipping id_token_hint because the session token issuer does not match the active OIDC provider', {
+          tokenIssuer: getJwtIssuer(idToken),
+          expectedIssuer: normalizeIssuer(expectedIssuer),
+          clientId: config.clientId,
+        });
       }
+
+      if (config.postLogoutRedirectUri) {
+        logoutParameters.post_logout_redirect_uri = config.postLogoutRedirectUri;
+      }
+
+      const endSessionUrl = oidc.buildEndSessionUrl(oidcConfig, logoutParameters);
+      logger.info('RP-Initiated Logout redirect created', {
+        endSessionEndpoint: serverMetadata.end_session_endpoint,
+        hasIdTokenHint: Boolean(logoutParameters.id_token_hint),
+      });
+
+      return createRedirectResponse(endSessionUrl.toString(), { headers });
+    } catch (error) {
+      logger.warn('OIDC end_session endpoint unavailable, falling back to local redirect', {
+        error: getOAuthErrorMessage(error),
+      });
     }
 
     // Fallback redirect
-    const baseUrl = new URL(request.url).origin;
     const registeredPath = config.postLogoutRedirectUri || '/';
-    const finalRedirectUrl = registeredPath.startsWith('http') 
-      ? registeredPath 
-      : `${baseUrl}${registeredPath}`;
+    const finalRedirectUrl = getAbsoluteRedirectUrl(request, registeredPath);
 
     logger.info('Logout completed', { redirectUrl: finalRedirectUrl });
     return createRedirectResponse(finalRedirectUrl, { headers });
@@ -1001,6 +1487,105 @@ export async function logout(request: Request): Promise<Response> {
     logger.error('Logout failed', error instanceof Error ? error : undefined);
     const headers = await destroyAuthSession(request);
     return createRedirectResponse('/', { headers });
+  }
+}
+
+/**
+ * Handle an OIDC Back-Channel Logout request from Keycloak or another OP.
+ *
+ * Configure the client Backchannel logout URL to this endpoint. The logout
+ * token is signature-verified against the provider JWKS, issuer/audience are
+ * checked, and all matching local Redis sessions are destroyed by `sid` first,
+ * falling back to `sub` when the OP omits a session id.
+ */
+export async function handleBackChannelLogout(request: Request): Promise<Response> {
+  if (request.method !== 'POST') {
+    return Response.json({ error: 'method_not_allowed' }, { status: 405 });
+  }
+
+  try {
+    const config = getAuthConfig();
+    const oidcConfig = await getOAuthConfig();
+    const serverMetadata = oidcConfig.serverMetadata();
+    const logoutToken = await getLogoutTokenFromRequest(request);
+
+    if (!logoutToken) {
+      return Response.json({ error: 'missing_logout_token' }, { status: 400 });
+    }
+
+    if (!serverMetadata.jwks_uri) {
+      throw new Error('OIDC provider does not expose jwks_uri');
+    }
+
+    const { payload } = await jwtVerify(logoutToken, getJwks(serverMetadata.jwks_uri), {
+      issuer: serverMetadata.issuer ?? config.authority,
+      audience: config.clientId,
+      clockTolerance: 60,
+    });
+
+    const claims = validateBackChannelLogoutClaims(payload as Record<string, unknown>, config.clientId);
+    const destroyedSessions = await destroyAuthSessionsByIdentitySession({
+      sid: claims.sid,
+      userId: claims.subject,
+    });
+    const result: BackChannelLogoutResult = {
+      destroyedSessions,
+      issuer: claims.issuer,
+      subject: claims.subject,
+      sid: claims.sid,
+    };
+
+    logger.info('Back-channel logout processed', { ...result });
+    return Response.json({ success: true, ...result });
+  } catch (error) {
+    logger.error('Back-channel logout failed', error instanceof Error ? error : undefined);
+    return Response.json(
+      { error: 'invalid_logout_token', error_description: getOAuthErrorMessage(error) },
+      { status: 400 }
+    );
+  }
+}
+
+/**
+ * Handle OIDC Front-Channel Logout iframe/browser requests.
+ *
+ * Front-channel logout cannot carry a signed logout token, so this validates the
+ * issuer and applies local cleanup only when a `sid` is present.
+ */
+export async function handleFrontChannelLogout(request: Request): Promise<Response> {
+  try {
+    const config = getAuthConfig();
+    const oidcConfig = await getOAuthConfig();
+    const serverMetadata = oidcConfig.serverMetadata();
+    const url = new URL(request.url);
+    const issuer = url.searchParams.get('iss');
+    const sid = url.searchParams.get('sid');
+    const expectedIssuer = normalizeIssuer(serverMetadata.issuer ?? config.authority);
+
+    if (!issuer || normalizeIssuer(issuer) !== expectedIssuer) {
+      return new Response(null, { status: 204 });
+    }
+
+    const destroyedSessions = sid ? await destroyAuthSessionsBySid(sid) : 0;
+    const result: FrontChannelLogoutResult = {
+      destroyedSessions,
+      issuer,
+      sid: sid ?? undefined,
+    };
+
+    logger.info('Front-channel logout processed', { ...result });
+    return new Response(null, {
+      status: 204,
+      headers: {
+        'Cache-Control': 'no-store',
+      },
+    });
+  } catch (error) {
+    logger.warn('Front-channel logout ignored', {
+      error: getOAuthErrorMessage(error),
+    });
+
+    return new Response(null, { status: 204 });
   }
 }
 
@@ -1062,47 +1647,10 @@ export async function refreshTokens(
       return { success: false, error: 'No refresh token available', shouldLogout: true };
     }
 
-    const { authorizationServer, client } = await getOAuthConfig();
-    const clientAuth = getClientAuth();
-
     logger.info('Initiating token refresh');
 
-    const refreshResponse = await oauth.refreshTokenGrantRequest(
-      authorizationServer,
-      client,
-      clientAuth,
-      tokenToRefresh
-    );
-
-    if (!refreshResponse.ok) {
-      const errorText = await refreshResponse.text().catch(() => 'Unknown error');
-      logger.error('Token refresh failed', undefined, { status: refreshResponse.status, errorText });
-
-      let errorData: Record<string, unknown> = {};
-      try {
-        errorData = JSON.parse(errorText);
-      } catch {
-        // Ignore parse errors
-      }
-
-      const shouldLogout =
-        refreshResponse.status === 400 ||
-        errorData.error === 'invalid_grant' ||
-        errorData.error === 'invalid_token' ||
-        refreshResponse.status === 401;
-
-      return {
-        success: false,
-        error: `Token refresh failed: ${errorData.error_description || errorData.error || 'Unknown'}`,
-        shouldLogout,
-      };
-    }
-
-    const refreshResult = await oauth.processRefreshTokenResponse(
-      authorizationServer,
-      client,
-      refreshResponse
-    );
+    const oidcConfig = await getOAuthConfig();
+    const refreshResult = await oidc.refreshTokenGrant(oidcConfig, tokenToRefresh);
 
     logger.info('Token refresh successful');
 
@@ -1132,16 +1680,10 @@ export async function refreshTokens(
   } catch (error) {
     logger.error('Token refresh failed with exception', error instanceof Error ? error : undefined);
 
-    const shouldLogout =
-      error instanceof Error &&
-      (error.message.includes('invalid_grant') ||
-        error.message.includes('invalid_token') ||
-        error.message.includes('unauthorized'));
-
     return {
       success: false,
-      error: error instanceof Error ? error.message : 'Token refresh failed',
-      shouldLogout,
+      error: getOAuthErrorMessage(error),
+      shouldLogout: shouldLogoutAfterOAuthError(error),
     };
   }
 }
@@ -1154,4 +1696,5 @@ export { isSessionValid };
  */
 export function clearAuthServerCache(): void {
   authServerCache = null;
+  jwksCache.clear();
 }

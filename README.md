@@ -54,8 +54,9 @@ Spine aims to be:
 
 ## What Spine Includes
 
-- OAuth2/OIDC login, callback handling, logout, and token refresh
-- Redis-backed session and OAuth state storage
+- OpenID Connect login, callback handling, RP-Initiated Logout, and token refresh
+- Redis-backed session and OAuth state storage with user/session indexes
+- Keycloak-compatible front-channel and back-channel logout handlers
 - Server-side route protection primitives
 - Server-side permission route protection configuration
 - Multi-tenant client state and server helpers
@@ -113,18 +114,56 @@ The built-in auth/session layer currently reads these environment variables:
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OIDC_AUTHORITY` | Yes | OAuth/OIDC issuer base URL |
+| `OIDC_AUTHORITY` | Yes | OpenID Connect issuer base URL |
 | `OIDC_CLIENT_ID` | Yes | Client identifier |
-| `OIDC_REDIRECT_URI` | Yes | OAuth callback URL |
+| `OIDC_REDIRECT_URI` | Yes | OIDC callback URL |
 | `OIDC_CLIENT_SECRET` | No | Client secret for confidential clients |
-| `OIDC_SCOPE` | No | Requested scope string |
+| `OIDC_CLIENT_AUTH_METHOD` | No | `none`, `client_secret_post`, or `client_secret_basic` |
+| `OIDC_SCOPE` | No | Requested scope string. Defaults to `openid profile email api` |
 | `OIDC_POST_LOGOUT_REDIRECT_URI` | No | Logout return URL |
 | `OIDC_APPLICATION_TYPE` | No | `no-landing-page`, `landing-page`, or legacy aliases |
-| `OIDC_SSO_LOGOUT` | No | Explicit full-logout override |
 | `OIDC_HAS_LANDING_PAGE` | No | Explicit landing-page behavior override |
+| `OIDC_ALLOW_INSECURE_REQUESTS` | No | Allows non-HTTPS OIDC issuer calls only outside production |
 | `REDIS_URL` | No | Redis connection string for sessions and OAuth state |
 | `REDIS_KEY_PREFIX` | No | Prefix for Redis keys |
 | `API_BASE_URL` | No | Default API base URL for `createAPIConfigFactory` |
+
+## OIDC Session Lifecycle
+
+Spine treats the OIDC provider as the identity/session authority and the app as a relying party with its own Redis session. The default logout behavior follows RP-Initiated Logout:
+
+- `/auth/logout` clears the current app session and redirects to the provider end-session endpoint.
+- `/auth/logout?logout=local` clears only the current app session. Use this for automatic cleanup after token refresh failure or expired local state.
+- `/auth/logout?logout=all` revokes all known app sessions for the current user, clears their Redis session indexes, and then redirects to the provider end-session endpoint.
+
+For Keycloak clients, wire the provider logout callbacks to thin app routes that call Spine:
+
+```ts
+// app/routes/auth/backchannel-logout.ts
+import { handleBackChannelLogout } from '@eminuckan/spine/react-router/server';
+
+export async function action({ request }: { request: Request }) {
+  return handleBackChannelLogout(request);
+}
+```
+
+```ts
+// app/routes/auth/frontchannel-logout.ts
+import { handleFrontChannelLogout } from '@eminuckan/spine/react-router/server';
+
+export async function loader({ request }: { request: Request }) {
+  return handleFrontChannelLogout(request);
+}
+```
+
+In Keycloak, configure the client with:
+
+- Backchannel Logout URL: `https://your-app.example.com/auth/backchannel-logout`
+- Backchannel Logout Session Required: enabled
+- Frontchannel Logout URL: `https://your-app.example.com/auth/frontchannel-logout`
+- Frontchannel Logout Session Required: enabled
+
+Back-channel logout verifies the signed `logout_token` against the provider JWKS and destroys sessions by `sid` or `sub`. Front-channel logout validates `iss` and destroys sessions by `sid` when Keycloak sends it.
 
 ## Quick Start
 

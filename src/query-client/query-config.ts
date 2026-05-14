@@ -64,7 +64,7 @@ function createDefaultLogoutHandler(): (returnUrl?: string) => void {
   return (returnUrl?: string) => {
     if (typeof window !== 'undefined') {
       const currentUrl = returnUrl || window.location.pathname + window.location.search;
-      window.location.href = `/auth/logout?returnUrl=${encodeURIComponent(currentUrl)}`;
+      window.location.href = `/auth/logout?logout=local&returnUrl=${encodeURIComponent(currentUrl)}`;
     }
   };
 }

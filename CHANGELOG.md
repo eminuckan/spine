@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Added
+
+- Added Keycloak-compatible back-channel and front-channel logout handlers.
+- Added Redis session indexes by user, OIDC `sid`, and legacy `session_state`.
+- Added session listing and destroy primitives for current-user, all-user, `sid`, and `session_state` cleanup.
+- Added OIDC client authentication method configuration for public and confidential clients.
+
+### Changed
+
+- Switched server-side auth from direct `oauth4webapi` calls to `openid-client`.
+- Made default logout RP-Initiated Logout and kept app-local cleanup explicit with `logout=local`.
+- Removed `offline_access` from the default scope; apps can opt in explicitly if they need long-lived refresh tokens.
+
+## [0.2.4] - 2026-04-25
+
+### Fixed
+
+- Allow HTTP OIDC requests for localhost issuers in non-production environments.
+- Keep insecure OIDC requests disabled unconditionally in production.
+
+## [0.2.3] - 2026-04-25
+
+### Fixed
+
+- Added richer OIDC discovery diagnostics, including the resolved discovery URL.
+- Avoid sending stale `id_token_hint` values to a new OIDC provider during provider migrations.
+
 ## [0.2.0] - 2026-03-15
 
 ### Added

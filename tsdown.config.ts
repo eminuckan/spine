@@ -8,6 +8,7 @@ export default defineConfig({
     'react-router/server': 'src/react-router/server.ts',
     'auth/index': 'src/auth/index.ts',
     'auth/server': 'src/auth/server.ts',
+    'access/index': 'src/access/index.ts',
     'permissions/index': 'src/permissions/index.ts',
     'tenant/index': 'src/tenant/index.ts',
     'tenant/server': 'src/tenant/server.ts',

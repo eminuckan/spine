@@ -8,12 +8,16 @@
 // Types
 export type {
   UserInfo,
+  AuthSessionSummary,
   AuthConfig,
   SessionData,
   OAuthState,
   LoginOptions,
   AuthError,
   ApplicationType,
+  BackChannelLogoutResult,
+  FrontChannelLogoutResult,
+  OidcClientAuthMethod,
 } from './types';
 
 // Client-side hooks (if any future hooks are added)
