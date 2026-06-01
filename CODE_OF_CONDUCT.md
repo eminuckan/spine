@@ -2,7 +2,7 @@
 
 ## Our Pledge
 
-We want Mimir to be a welcoming project for contributors of all experience levels. We commit to making participation respectful, constructive, and harassment-free.
+We want Spine to be a welcoming project for contributors of all experience levels. We commit to making participation respectful, constructive, and harassment-free.
 
 ## Our Standards
 

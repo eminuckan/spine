@@ -72,7 +72,9 @@ export interface IdentityContextData {
   // === Onboarding & Status ===
   /** Whether user has completed onboarding */
   isOnboarded?: boolean;
-  /** Whether user has an active subscription */
+  /** Whether user has an active entitlement for gated product areas */
+  hasEntitlement?: boolean;
+  /** @deprecated Use hasEntitlement or app-specific metadata instead. */
   hasSubscription?: boolean;
   /** Whether user's email is verified */
   emailVerified?: boolean;

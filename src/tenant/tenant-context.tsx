@@ -5,8 +5,8 @@
  */
 
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
-import { useTenantStore } from './tenant-store';
-import type { OrganizationData, TenantContextType, TenantMembership } from './types';
+import { getTenantCookieName, useTenantStore } from './tenant-store';
+import type { OrganizationData, TenantContextType, TenantData, TenantMembership } from './types';
 
 const TenantContext = createContext<TenantContextType | null>(null);
 
@@ -28,16 +28,18 @@ export function TenantProvider({
   const currentTenant = useTenantStore((state) => state.currentTenant);
   const availableTenants = useTenantStore((state) => state.availableTenants);
   const memberships = useTenantStore((state) => state.memberships);
+  const tenantData = useTenantStore((state) => state.tenantData);
   const organizations = useTenantStore((state) => state.organizations);
   const isLoading = useTenantStore((state) => state.isLoading || state.isSwitching);
-  const currentOrganization = useTenantStore((state) => state.getCurrentOrganization());
+  const currentTenantData = useTenantStore((state) => state.getCurrentTenantData());
   const currentMembership = useTenantStore((state) => state.getCurrentMembership());
 
   const setCurrentTenant = useTenantStore((state) => state.setCurrentTenant);
   const setAvailableTenants = useTenantStore((state) => state.setAvailableTenants);
   const setMemberships = useTenantStore((state) => state.setMemberships);
   const switchTenantAction = useTenantStore((state) => state.switchTenant);
-  const fetchOrganization = useTenantStore((state) => state.fetchOrganization);
+  const fetchTenantData = useTenantStore((state) => state.fetchTenantData);
+  const getTenantData = useTenantStore((state) => state.getTenantData);
   const getOrganization = useTenantStore((state) => state.getOrganization);
   const getMembership = useTenantStore((state) => state.getMembership);
   const getTenantName = useTenantStore((state) => state.getTenantName);
@@ -66,8 +68,9 @@ export function TenantProvider({
   useEffect(() => {
     const getCookieTenant = () => {
       const cookies = document.cookie.split(';');
+      const cookieName = getTenantCookieName();
       const tenantCookie = cookies.find((cookie) =>
-        cookie.trim().startsWith('__active-org=')
+        cookie.trim().startsWith(`${cookieName}=`)
       );
 
       if (tenantCookie) {
@@ -100,34 +103,42 @@ export function TenantProvider({
     console.log('Tenant refresh requested - should be handled by identity context');
   };
 
-  // Refresh organization
-  const refreshOrganization = () => {
+  // Refresh tenant data
+  const refreshTenantData = () => {
     if (currentTenant) {
-      fetchOrganization(currentTenant);
+      fetchTenantData(currentTenant);
     }
   };
 
-  // Load organization data when tenant is set
+  const refreshOrganization = refreshTenantData;
+
+  // Load tenant data when tenant is set
   useEffect(() => {
-    if (currentTenant && !currentOrganization) {
-      refreshOrganization();
+    if (currentTenant && !currentTenantData) {
+      refreshTenantData();
     }
-  }, [currentTenant, currentOrganization]);
+  }, [currentTenant, currentTenantData]);
+
+  const currentOrganization = currentTenantData as OrganizationData | null;
 
   const value: TenantContextType = {
     currentTenant,
     availableTenants,
     memberships,
-    currentOrganization,
+    currentTenantData,
+    tenantData,
     currentMembership,
-    organizations,
     isLoading,
     switchTenant,
     refreshTenants,
-    refreshOrganization,
-    getOrganization,
+    refreshTenantData,
+    getTenantData,
     getMembership,
     getTenantName,
+    currentOrganization,
+    organizations,
+    refreshOrganization,
+    getOrganization,
   };
 
   return (
@@ -167,7 +178,30 @@ export function useTenantSwitcher() {
 }
 
 /**
+ * Hook for current tenant data
+ */
+export function useCurrentTenantData(): TenantData | null {
+  const { currentTenantData } = useTenant();
+  return currentTenantData;
+}
+
+/**
+ * Hook for tenant data operations
+ */
+export function useTenantData() {
+  const { currentTenantData, refreshTenantData, isLoading } = useTenant();
+
+  return {
+    tenantData: currentTenantData,
+    refreshTenantData,
+    isLoading,
+  };
+}
+
+/**
  * Hook for current organization
+ *
+ * @deprecated Use useCurrentTenantData instead.
  */
 export function useCurrentOrganization(): OrganizationData | null {
   const { currentOrganization } = useTenant();
@@ -176,6 +210,8 @@ export function useCurrentOrganization(): OrganizationData | null {
 
 /**
  * Hook for organization operations
+ *
+ * @deprecated Use useTenantData instead.
  */
 export function useOrganization() {
   const { currentOrganization, refreshOrganization, isLoading } = useTenant();

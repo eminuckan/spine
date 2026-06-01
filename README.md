@@ -1,5 +1,9 @@
 # Spine
 
+[![CI](https://github.com/eminuckan/spine/actions/workflows/ci.yml/badge.svg)](https://github.com/eminuckan/spine/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/%40eminuckan%2Fspine.svg)](https://www.npmjs.com/package/@eminuckan/spine)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 Framework-agnostic SaaS primitives for authentication, identity, permissions, multi-tenancy, API access, realtime events, query configuration, and logging.
 
 Spine is designed around one idea: the reusable parts of a SaaS platform should live in a single package, while application policy and framework quirks should stay in thin adapters. Today the package ships a framework-agnostic core plus a React Router adapter surface. Future adapters can follow the same pattern.
@@ -10,6 +14,7 @@ Spine is designed around one idea: the reusable parts of a SaaS platform should 
 - Current adapter: `@eminuckan/spine/react-router`
 - Server primitives use Web `Request`/`Response` objects, not framework-specific response helpers
 - React Router adapter is intentionally thin today so other adapters can be added without changing the core contract
+- Extracted from repeated production-facing SaaS frontend infrastructure needs, then rebooted as an independent OSS package
 
 ## Why Spine
 
@@ -28,7 +33,7 @@ Spine aims to be:
 - Core before adapter: framework-specific behavior belongs in dedicated adapter entry points
 - Configure, do not fork: backend claim names, cookie behavior, endpoints, and redirects should be configured first
 - Request/Response first: server modules should work anywhere a standard Web `Request` and `Response` exist
-- App policy stays local: onboarding flows, subscription gates, product-specific redirects, and permission taxonomies should live in the consuming app
+- App policy stays local: setup flows, entitlement gates, product-specific redirects, and permission taxonomies should live in the consuming app
 - Open for composition: apps should be able to wrap Spine primitives instead of rewriting them
 
 ## Package Surfaces
@@ -68,8 +73,8 @@ Spine aims to be:
 
 ## What Spine Does Not Include
 
-- Your product's onboarding rules
-- Your product's subscription rules
+- Your product's setup rules
+- Your product's billing or entitlement rules
 - Your product's permission vocabulary
 - Your backend DTOs or generated API clients
 - Your page structure, layouts, or UI system
@@ -108,6 +113,19 @@ If you use client-side React features, install peer dependencies too:
 pnpm add react @tanstack/react-query
 ```
 
+For a fuller setup path, see [docs/installation.md](docs/installation.md).
+
+## Try the Example App
+
+```bash
+cd examples/react-router-saas
+pnpm install
+cp .env.example .env
+pnpm dev
+```
+
+The example includes React Router auth routes, a protected dashboard loader, client provider wiring, and local app adapters for backend identity and tenant conventions.
+
 ## Environment Variables
 
 The built-in auth/session layer currently reads these environment variables:
@@ -126,7 +144,7 @@ The built-in auth/session layer currently reads these environment variables:
 | `OIDC_ALLOW_INSECURE_REQUESTS` | No | Allows non-HTTPS OIDC issuer calls only outside production |
 | `REDIS_URL` | No | Redis connection string for sessions and OAuth state |
 | `REDIS_KEY_PREFIX` | No | Prefix for Redis keys |
-| `API_BASE_URL` | No | Default API base URL for `createAPIConfigFactory` |
+| `API_BASE_URL` | No | Optional fallback API base URL for `createAPIConfigFactory` |
 
 ## OIDC Session Lifecycle
 
@@ -172,7 +190,7 @@ Back-channel logout verifies the signed `logout_token` against the provider JWKS
 Spine's server modules are generic, so your app should provide backend-specific fetchers once.
 
 ```ts
-// app/lib/mimir/identity.server.ts
+// app/lib/spine/identity.server.ts
 import {
   configureIdentityAPIFetcher,
   configurePermissionFetcher,
@@ -182,7 +200,6 @@ import {
 import { createAPIConfigFactory } from '@eminuckan/spine/api-client/server';
 import { getAccessToken } from '@eminuckan/spine/react-router/server';
 import { getCurrentTenant } from '@eminuckan/spine/tenant/server';
-import { Configuration, IdentityApi } from '~/lib/api-clients/api';
 
 const { createAPIConfig } = createAPIConfigFactory(getAccessToken, getCurrentTenant);
 
@@ -192,47 +209,38 @@ configureIdentityAPIFetcher(async (request) => {
     includeAuth: true,
   });
 
-  const api = new IdentityApi(
-    new Configuration({
-      basePath: config.basePath,
-      accessToken: config.accessToken,
-      baseOptions: { headers: config.headers },
-    })
-  );
+  const response = await fetch(`${config.basePath}/api/me/context`, {
+    headers: config.headers,
+  });
 
-  const response = await api.identityGetMyContext();
+  if (!response.ok) {
+    throw new Error(`Failed to load identity context: ${response.status}`);
+  }
 
-  return {
-    ...response.data,
-    contextVersion: Date.now(),
-    hasSubscription: Boolean(
-      response.data.onboarding?.subscription?.exists &&
-      ['active', 'trialing'].includes(response.data.onboarding?.subscription?.status || '')
-    ),
-  };
+  return response.json();
 });
 
 configurePermissionFetcher(async (request, tenantId) => {
   const config = await createAPIConfig(request, { requireTenant: false });
-  const api = new IdentityApi(
-    new Configuration({
-      basePath: config.basePath,
-      accessToken: config.accessToken,
-      baseOptions: { headers: config.headers },
-    })
-  );
+  const response = await fetch(`${config.basePath}/api/me/permissions?tenantId=${tenantId}`, {
+    headers: config.headers,
+  });
 
-  const response = await api.identityGetMyPermissions(tenantId);
-  return response.data.permissions || [];
+  if (!response.ok) {
+    return [];
+  }
+
+  const payload = await response.json();
+  return payload.permissions || [];
 });
 
 export { contextToUserInfo, getIdentityContext };
 ```
 
 ```ts
-// app/lib/mimir/tenant.server.ts
+// app/lib/spine/tenant.server.ts
 import {
-  configureIdentityContextFetcher,
+  configureTenantResolution,
   configureTenantCookie,
   getAvailableTenants,
   getCurrentTenant,
@@ -245,7 +253,9 @@ configureTenantCookie({
   sameSite: 'Lax',
 });
 
-configureIdentityContextFetcher(fetchIdentityContext);
+configureTenantResolution({
+  identityContextFetcher: fetchIdentityContext,
+});
 
 export {
   getAvailableTenants,
@@ -257,7 +267,7 @@ export {
 ### 2. Configure Server-Side Permission Protection
 
 ```ts
-// app/lib/mimir/permissions.server.ts
+// app/lib/spine/permissions.server.ts
 import {
   configurePermissionRouteProtection,
   requirePermission,
@@ -295,8 +305,8 @@ export { requirePermission };
 ```ts
 // app/routes/_protected.tsx
 import { authRoute, getAccessToken } from '@eminuckan/spine/react-router/server';
-import { getCurrentTenant, initializeTenant } from '~/lib/mimir/tenant.server';
-import { contextToUserInfo, getIdentityContext } from '~/lib/mimir/identity.server';
+import { getCurrentTenant, initializeTenant } from '~/lib/spine/tenant.server';
+import { contextToUserInfo, getIdentityContext } from '~/lib/spine/identity.server';
 
 export async function loader({ request }: { request: Request }) {
   return authRoute(request, async (user) => {
@@ -388,10 +398,10 @@ import {
 } from '@eminuckan/spine/server';
 
 configureAuthClaimMapping({
-  tenantIds: ['organizations', 'tenant_ids'],
-  tenantRoles: ['organization_roles', 'tenant_roles'],
+  tenantIds: ['tenant_ids'],
+  tenantRoles: ['tenant_roles'],
   permissions: ['permissions', 'scope'],
-  isOnboarded: ['profile_complete', 'is_onboarded'],
+  isOnboarded: ['is_onboarded'],
 });
 
 configureIdentityStore({
@@ -405,17 +415,24 @@ configureRouteProtection({
 });
 ```
 
+Client contracts are configurable too. Simple apps can use endpoint configuration; apps with workspace/account/customer-specific contracts can provide `fetchTenantData`, `switchTenant`, `fetchContext`, and `fetchPermissions` functions. API header names are configurable through `createAPIConfigFactory`.
+
 More adaptation examples live in [docs/backend-adaptation.md](docs/backend-adaptation.md).
 
 ## Module Guides
 
 - [Architecture](docs/architecture.md)
+- [Installation](docs/installation.md)
 - [Adapters](docs/adapters.md)
 - [Backend Adaptation](docs/backend-adaptation.md)
 - [Module Reference](docs/module-reference.md)
+- [Roadmap](ROADMAP.md)
+- [Codex Maintenance Plan](docs/codex-maintenance.md)
 - [Releasing](docs/releasing.md)
 - [Contributing](CONTRIBUTING.md)
+- [Maintainers](MAINTAINERS.md)
 - [Security](SECURITY.md)
+- [Code of Conduct](CODE_OF_CONDUCT.md)
 
 ## Current Boundaries
 
@@ -430,27 +447,27 @@ Spine already owns the reusable infrastructure for:
 
 Consuming apps should still own:
 
-- Product-specific onboarding pages and redirects
-- Product-specific subscription policies
+- Product-specific setup pages and redirects
+- Product-specific billing or entitlement policies
 - Permission constants and domain vocabulary
 - Generated API clients
 - UI-specific wrappers and design system components
 
 ## Roadmap
 
+The active roadmap lives in [ROADMAP.md](ROADMAP.md). Current tracks include:
+
 - First-class Next.js adapter surface
-- More adapter authoring guidance
-- Cleaner permission taxonomy extension story
-- More example apps
-- Broader runtime coverage tests
+- Clerk and Supabase integration guidance
+- More adapter authoring tests and examples
+- Cleaner migration from deprecated compatibility aliases
+- Public API stability review before `1.0`
 
 ## Development
 
 ```bash
 pnpm install
-pnpm typecheck
-pnpm build
-pnpm lint
+pnpm check
 ```
 
 Detailed contributor guidance lives in [CONTRIBUTING.md](CONTRIBUTING.md).

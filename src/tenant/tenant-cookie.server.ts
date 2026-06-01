@@ -16,7 +16,7 @@ export interface TenantCookieConfig {
 }
 
 const DEFAULT_TENANT_COOKIE_CONFIG: Required<TenantCookieConfig> = {
-  name: '__active-org',
+  name: '__spine_tenant',
   maxAge: 60 * 60 * 24 * 365,
   path: '/',
   secure: process.env.NODE_ENV === 'production',
@@ -32,6 +32,19 @@ function getTenantCookieConfig(): Required<TenantCookieConfig> {
   return tenantCookieConfig;
 }
 
+function readCookieValue(cookieHeader: string, name: string): string | null {
+  for (const segment of cookieHeader.split(';')) {
+    const [rawName, ...rawValue] = segment.split('=');
+    if (rawName?.trim() !== name || rawValue.length === 0) {
+      continue;
+    }
+
+    return decodeURIComponent(rawValue.join('='));
+  }
+
+  return null;
+}
+
 /**
  * Get active tenant from cookie
  */
@@ -40,10 +53,7 @@ export async function getActiveTenant(request: Request): Promise<string | null> 
   const cookies = request.headers.get('Cookie');
   if (!cookies) return null;
 
-  const match = cookies.match(new RegExp(`${config.name}=([^;]+)`));
-  if (!match) return null;
-
-  return decodeURIComponent(match[1]);
+  return readCookieValue(cookies, config.name);
 }
 
 /**

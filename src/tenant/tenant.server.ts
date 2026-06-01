@@ -6,21 +6,72 @@
 
 import { getAuthSession } from '../auth/redis-session-storage.server';
 import { getActiveTenant, setActiveTenant, clearActiveTenant } from './tenant-cookie.server';
+import type { SessionData } from '../auth/types';
 
 /**
  * Identity context fetcher type (to avoid circular dependency)
  */
 export type IdentityContextFetcher = (request: Request) => Promise<{
-  memberships?: Array<{ tenantId: string }>;
+  memberships?: Array<{ tenantId?: string; id?: string; [key: string]: unknown }>;
+  [key: string]: unknown;
 } | null>;
 
+export interface TenantResolutionContext {
+  request: Request;
+  session: SessionData;
+  identityContext: Awaited<ReturnType<IdentityContextFetcher>>;
+}
+
+export interface TenantResolutionConfig {
+  identityContextFetcher?: IdentityContextFetcher;
+  resolveInitialTenant?: (context: TenantResolutionContext) => Promise<string | null> | string | null;
+  resolveAvailableTenants?: (context: TenantResolutionContext) => Promise<string[]> | string[];
+}
+
 let identityContextFetcher: IdentityContextFetcher | null = null;
+let resolveInitialTenant: NonNullable<TenantResolutionConfig['resolveInitialTenant']> =
+  ({ identityContext }) => {
+    const membership = identityContext?.memberships?.[0];
+    return membership?.tenantId ?? membership?.id ?? null;
+  };
+let resolveAvailableTenants: NonNullable<TenantResolutionConfig['resolveAvailableTenants']> =
+  ({ identityContext }) =>
+    identityContext?.memberships
+      ?.map((membership) => membership.tenantId ?? membership.id)
+      .filter((tenantId): tenantId is string => Boolean(tenantId)) ?? [];
 
 /**
  * Configure identity context fetcher
  */
 export function configureIdentityContextFetcher(fetcher: IdentityContextFetcher): void {
   identityContextFetcher = fetcher;
+}
+
+/**
+ * Configure tenant resolution for custom backend identity contracts.
+ */
+export function configureTenantResolution(config: TenantResolutionConfig): void {
+  if (config.identityContextFetcher) {
+    identityContextFetcher = config.identityContextFetcher;
+  }
+  if (config.resolveInitialTenant) {
+    resolveInitialTenant = config.resolveInitialTenant;
+  }
+  if (config.resolveAvailableTenants) {
+    resolveAvailableTenants = config.resolveAvailableTenants;
+  }
+}
+
+export function resetTenantResolutionConfig(): void {
+  identityContextFetcher = null;
+  resolveInitialTenant = ({ identityContext }) => {
+    const membership = identityContext?.memberships?.[0];
+    return membership?.tenantId ?? membership?.id ?? null;
+  };
+  resolveAvailableTenants = ({ identityContext }) =>
+    identityContext?.memberships
+      ?.map((membership) => membership.tenantId ?? membership.id)
+      .filter((tenantId): tenantId is string => Boolean(tenantId)) ?? [];
 }
 
 /**
@@ -55,12 +106,7 @@ export async function getTenantFromIdentityContext(request: Request): Promise<st
     }
 
     const context = await identityContextFetcher(request);
-
-    if (context?.memberships && context.memberships.length > 0) {
-      return context.memberships[0].tenantId;
-    }
-
-    return null;
+    return resolveInitialTenant({ request, session: sessionData, identityContext: context });
   } catch (error) {
     console.error('Error getting tenant from identity context:', error);
     return null;
@@ -83,12 +129,7 @@ export async function getAvailableTenants(request: Request): Promise<string[]> {
     }
 
     const context = await identityContextFetcher(request);
-
-    if (context?.memberships && context.memberships.length > 0) {
-      return context.memberships.map((m) => m.tenantId);
-    }
-
-    return [];
+    return resolveAvailableTenants({ request, session: sessionData, identityContext: context });
   } catch (error) {
     console.error('Error getting available tenants:', error);
     return [];

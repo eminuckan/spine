@@ -27,7 +27,7 @@ export type SignalRConnectionState =
  */
 export interface SignalRClientConfig {
   /**
-   * Base URL for SignalR hub (defaults to API base URL)
+   * Base URL for SignalR hub. Defaults to window.location.origin in browsers.
    */
   baseUrl?: string;
   /**

@@ -8,16 +8,17 @@ Run:
 
 ```bash
 pnpm install
-pnpm typecheck
-pnpm build
-pnpm lint
+pnpm check
+npm pack --dry-run
 ```
 
 Review:
 
 - `README.md`
-- `CHANGELOG.md`
 - `package.json`
+- `CHANGELOG.md`
+- `README.md`
+- `ROADMAP.md`
 
 ## Versioning
 
@@ -40,7 +41,7 @@ gh repo edit eminuckan/spine --homepage "https://github.com/eminuckan/spine#read
 
 ## npm Publishing
 
-You need npm authentication on the machine or an `NPM_TOKEN`.
+You need npm authentication on the machine for manual publishing, or npm trusted publishing configured for GitHub Actions.
 
 Manual publish:
 
@@ -56,9 +57,7 @@ npm publish --dry-run
 
 ## GitHub Actions Release Workflow
 
-The repository includes a release workflow that expects:
-
-- `NPM_TOKEN` GitHub Actions secret
+The repository includes a release workflow that expects npm trusted publishing to be configured for the `npm-publish` GitHub environment.
 
 Recommended tag format:
 
@@ -72,7 +71,8 @@ git push origin v0.2.0
 - Version updated
 - Changelog updated
 - Docs updated
-- Build and typecheck pass
+- `pnpm check` passes
+- `npm pack --dry-run` includes only intended files
 - GitHub repo is public
 - npm auth is available
 - Publish succeeds

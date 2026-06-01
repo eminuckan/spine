@@ -56,8 +56,8 @@ Application adapters belong in the consuming app and translate Spine into produc
 
 Examples:
 
-- onboarding route redirects
-- subscription gating
+- setup route redirects
+- entitlement gating
 - domain-specific permission constants
 - generated backend API clients
 - UI wrappers around generic hooks
@@ -78,7 +78,7 @@ Owns:
 Does not own:
 
 - product-specific post-login routing
-- onboarding flow decisions
+- setup flow decisions
 
 ### Tenant
 
@@ -93,7 +93,7 @@ Owns:
 Does not own:
 
 - product-specific no-tenant redirects
-- organization creation flows
+- tenant provisioning flows
 
 ### Identity
 
@@ -107,7 +107,7 @@ Owns:
 Does not own:
 
 - backend DTO generation
-- product-specific onboarding data semantics beyond generic fields
+- product-specific setup data semantics beyond generic fields
 
 ### Permissions
 

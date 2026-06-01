@@ -5,10 +5,10 @@ import type {
   AccessOperator,
   AccessRequirement,
   AccessSubject,
-  SubscriptionAccessSnapshot,
+  EntitlementAccessSnapshot,
 } from './types';
 
-const ACTIVE_SUBSCRIPTION_STATUSES = new Set(['active', 'trialing']);
+const ACTIVE_ENTITLEMENT_STATUSES = new Set(['active', 'trialing']);
 
 const EMPTY_DECISION: AccessDecision = Object.freeze({
   allowed: true,
@@ -21,12 +21,12 @@ function normalizeFeature(value: string): string {
   return value.trim().toLowerCase();
 }
 
-function hasActiveSubscription(subscription?: SubscriptionAccessSnapshot | null): boolean {
-  if (!subscription?.exists) {
+function hasActiveEntitlement(entitlement?: EntitlementAccessSnapshot | null): boolean {
+  if (!entitlement?.exists) {
     return false;
   }
 
-  return ACTIVE_SUBSCRIPTION_STATUSES.has(subscription.status?.toLowerCase() ?? '');
+  return ACTIVE_ENTITLEMENT_STATUSES.has(entitlement.status?.toLowerCase() ?? '');
 }
 
 function checkFeatureSet(
@@ -59,6 +59,7 @@ export function evaluateAccessRequirement(
   const reasons: AccessDeniedReason[] = [];
   const permissions = requirement.permissions ?? [];
   const features = requirement.features ?? [];
+  const entitlement = subject.entitlement ?? subject.subscription;
   let missingPermissions: string[] = [];
   let missingFeatures: string[] = [];
 
@@ -66,7 +67,9 @@ export function evaluateAccessRequirement(
     reasons.push('internal-only');
   }
 
-  if (requirement.requireActiveSubscription && !hasActiveSubscription(subject.subscription)) {
+  if (requirement.requireActiveEntitlement && !hasActiveEntitlement(entitlement)) {
+    reasons.push('inactive-entitlement');
+  } else if (requirement.requireActiveSubscription && !hasActiveEntitlement(entitlement)) {
     reasons.push('inactive-subscription');
   }
 
@@ -85,7 +88,7 @@ export function evaluateAccessRequirement(
 
   if (features.length > 0) {
     missingFeatures = checkFeatureSet(
-      subject.subscription?.featureKeys ?? [],
+      entitlement?.featureKeys ?? [],
       features,
       requirement.featureOperator ?? 'AND',
     );

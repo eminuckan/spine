@@ -164,7 +164,7 @@ export const cachePresets: CachePresets = {
 
   /**
    * Normal data - changes occasionally
-   * Good for: properties, users, organizations
+   * Good for: resources, users, tenant data
    */
   normal: {
     staleTime: 5 * 60 * 1000, // 5 minutes

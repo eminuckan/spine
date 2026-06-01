@@ -26,7 +26,7 @@ The goal is to acknowledge reports quickly, validate impact, and coordinate a fi
 
 ## Scope Notes
 
-Mimir provides infrastructure primitives, but consuming applications are still responsible for:
+Spine provides infrastructure primitives, but consuming applications are still responsible for:
 
 - Backend authorization enforcement
 - Secure secret management
@@ -34,4 +34,4 @@ Mimir provides infrastructure primitives, but consuming applications are still r
 - Safe redirect and cookie policies
 - Protecting product-specific APIs and workflows
 
-Frontend permission checks and route guards in Mimir improve UX, but they are not a substitute for backend authorization.
+Frontend permission checks and route guards in Spine improve UX, but they are not a substitute for backend authorization.

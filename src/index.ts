@@ -11,7 +11,7 @@ export * from './logging';
 // Permissions (client-side)
 export * from './permissions';
 
-// Access evaluation (permissions + subscription entitlements)
+// Access evaluation (permissions + feature entitlements)
 export * from './access';
 
 // Tenant (client-side)

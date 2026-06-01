@@ -85,7 +85,7 @@ export interface CachePresets {
    */
   static: CachePreset;
   /**
-   * For data that changes occasionally (properties, users, etc.)
+   * For data that changes occasionally (resources, users, etc.)
    */
   normal: CachePreset;
   /**
@@ -103,19 +103,19 @@ export interface CachePresets {
  */
 export interface InvalidationHelpers {
   /**
-   * Invalidate all identity-related queries
+   * Invalidate all queries for a module
    */
-  invalidateIdentity: (queryClient: QueryClient) => Promise<void>;
+  invalidateModule: (queryClient: QueryClient, module: string) => Promise<void>;
   /**
-   * Invalidate all property-related queries
+   * Invalidate all list queries for a module
    */
-  invalidateProperties: (queryClient: QueryClient) => Promise<void>;
+  invalidateLists: (queryClient: QueryClient, module: string) => Promise<void>;
   /**
-   * Invalidate all accounting-related queries
+   * Invalidate a specific detail query
    */
-  invalidateAccounting: (queryClient: QueryClient) => Promise<void>;
+  invalidateDetail: (queryClient: QueryClient, module: string, id: string) => Promise<void>;
   /**
-   * Invalidate specific query by key
+   * Invalidate and refetch a specific query key
    */
-  invalidateByKey: (queryClient: QueryClient, queryKey: QueryKey) => Promise<void>;
+  invalidateAndRefetch: (queryClient: QueryClient, queryKey: QueryKey) => Promise<void>;
 }

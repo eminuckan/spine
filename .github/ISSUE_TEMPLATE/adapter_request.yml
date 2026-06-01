@@ -1,0 +1,48 @@
+name: Adapter request
+description: Propose a framework or provider adapter for Spine
+title: "[Adapter]: "
+labels:
+  - enhancement
+  - adapter
+body:
+  - type: dropdown
+    id: adapter_type
+    attributes:
+      label: Adapter type
+      options:
+        - Framework
+        - Auth provider
+        - Data/backend provider
+        - Realtime provider
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Target
+      placeholder: Next.js, Clerk, Supabase, Vue, Svelte, Auth0, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      placeholder: What integration pain would this adapter remove?
+    validations:
+      required: true
+  - type: textarea
+    id: proposed_surface
+    attributes:
+      label: Proposed surface
+      placeholder: Which entry points, helpers, examples, or docs should exist?
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Boundary check
+      placeholder: What should stay in the consuming app instead of Spine?
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      placeholder: Relevant docs, APIs, prior art, or example apps.

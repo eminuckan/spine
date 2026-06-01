@@ -22,6 +22,7 @@ export type {
   OidcClientAuthMethod,
   ProtectedLoaderFn,
   ProtectionLevel,
+  PublicAuthorizationStateContext,
   SessionData,
   SessionFlashData,
   UserInfo,

@@ -26,8 +26,8 @@ configureAuthClaimMapping({
   givenName: ['given_name', 'first_name'],
   familyName: ['family_name', 'last_name'],
   permissions: ['permissions', 'scope'],
-  tenantIds: ['tenant_ids', 'organizations'],
-  tenantRoles: ['tenant_roles', 'organization_roles'],
+  tenantIds: ['tenant_ids'],
+  tenantRoles: ['tenant_roles'],
   isOnboarded: ['is_onboarded', 'profile_complete'],
 });
 ```
@@ -54,7 +54,7 @@ configureIdentityAPIFetcher(async (request) => {
     memberships: payload.memberships,
     hasAnyMembership: payload.memberships.length > 0,
     isOnboarded: payload.flags.isOnboarded,
-    hasSubscription: payload.flags.hasSubscription,
+    hasEntitlement: payload.flags.hasEntitlement,
     contextVersion: payload.version,
   };
 });
@@ -79,9 +79,9 @@ configurePermissionFetcher(async (request, tenantId) => {
 });
 ```
 
-## Client Identity Store Endpoints
+## Client Identity Store
 
-Use `configureIdentityStore` if your app routes for identity context or logout differ.
+Simple apps can configure endpoint paths for browser-side identity refresh.
 
 ```ts
 import { configureIdentityStore } from '@eminuckan/spine/identity';
@@ -93,11 +93,28 @@ configureIdentityStore({
 });
 ```
 
-You can also override the fetcher or unauthorized handling logic.
+Apps with different response contracts can own the fetch and mapping logic.
 
 ```ts
 configureIdentityStore({
-  fetcher: window.fetch.bind(window),
+  fetchContext: async () => {
+    const response = await fetch('/session/me');
+    const payload = await response.json();
+
+    return {
+      userId: payload.account.id,
+      email: payload.account.email,
+      memberships: payload.workspaces.map((workspace) => ({
+        tenantId: workspace.id,
+        tenantName: workspace.name,
+      })),
+    };
+  },
+  fetchPermissions: async () => {
+    const response = await fetch('/session/capabilities');
+    const payload = await response.json();
+    return payload.capabilities;
+  },
   onUnauthorized: ({ logoutPath }) => {
     window.location.assign(`${logoutPath}?reason=expired`);
   },
@@ -112,7 +129,7 @@ Use `configureTenantCookie` to match your app's cookie requirements.
 import { configureTenantCookie } from '@eminuckan/spine/tenant/server';
 
 configureTenantCookie({
-  name: '__active-org',
+  name: '__app_tenant',
   httpOnly: false,
   sameSite: 'Lax',
   path: '/',
@@ -128,14 +145,25 @@ This is especially useful when:
 
 ## Tenant Resolution
 
-Use `configureIdentityContextFetcher` so tenant helpers can derive tenant state from your identity context.
+Use `configureTenantResolution` so tenant helpers can derive tenant state from any identity context shape.
 
 ```ts
-import { configureIdentityContextFetcher } from '@eminuckan/spine/tenant/server';
+import { configureTenantResolution } from '@eminuckan/spine/tenant/server';
 import { fetchIdentityContext } from './identity.server';
 
-configureIdentityContextFetcher(fetchIdentityContext);
+configureTenantResolution({
+  identityContextFetcher: fetchIdentityContext,
+  resolveInitialTenant: ({ identityContext }) => {
+    return identityContext?.workspaces?.[0]?.workspaceId ?? null;
+  },
+  resolveAvailableTenants: ({ identityContext }) => {
+    return identityContext?.workspaces?.map((workspace) => workspace.workspaceId) ?? [];
+  },
+});
 ```
+
+The older `configureIdentityContextFetcher` helper remains available for simple
+identity contexts that already expose `memberships[].tenantId`.
 
 ## Route Protection Policy
 
@@ -146,9 +174,10 @@ import { configureRouteProtection } from '@eminuckan/spine/server';
 
 configureRouteProtection({
   getLoginReturnUrl: ({ request }) => new URL(request.url).pathname,
-  resolveRoute: async ({ level, currentPath, identityContext }) => {
-    if (level === 'auth' && identityContext?.isOnboarded === false) {
-      return { redirectTo: '/onboarding' };
+  resolveRoute: async ({ protection, getIdentityContext }) => {
+    const identityContext = await getIdentityContext();
+    if (protection === 'auth' && identityContext?.isOnboarded === false) {
+      return { location: '/setup' };
     }
 
     return null;
@@ -195,9 +224,13 @@ const { createAPIConfig, getAPIBaseURL } = createAPIConfigFactory(
   {
     baseURL: process.env.API_BASE_URL,
     userAgent: 'MyApp/1.0',
+    tenantHeaderName: 'X-Workspace-Id',
   }
 );
 ```
+
+If your backend does not use bearer auth or tenant headers, set `authHeaderName`
+or `tenantHeaderName` to `null` and provide `buildHeaders`.
 
 ## Practical Rule
 
@@ -206,10 +239,11 @@ If the value could change from one backend to another, it should usually be conf
 Examples:
 
 - claim names
-- endpoint paths
+- endpoint paths and response shapes
 - logout URLs
 - cookie policies
 - redirect decisions
+- auth and tenant header names
 - permission loading
 
 If the logic is universal infrastructure, it should usually stay in core.

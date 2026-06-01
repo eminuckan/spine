@@ -57,9 +57,9 @@ A future adapter package should:
 
 ## What Should Not Go Into an Adapter
 
-- product-specific onboarding routes
+- product-specific setup routes
 - tenant-specific marketing flows
-- subscription plan assumptions
+- billing or entitlement plan assumptions
 - app-specific permission constants
 
 Those belong in the consuming application.

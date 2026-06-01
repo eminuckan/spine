@@ -139,12 +139,12 @@ export class SignalRClient {
   private buildHubUrl(): string {
     let baseUrl = this.config.baseUrl;
 
-    // Auto-detect base URL if not provided
     if (!baseUrl && typeof window !== 'undefined') {
-      baseUrl =
-        window.location.hostname === 'localhost'
-          ? 'https://localhost:5001' // Development
-          : window.location.origin; // Production
+      baseUrl = window.location.origin;
+    }
+
+    if (!baseUrl) {
+      throw new Error('SignalR baseUrl is required outside browser runtimes');
     }
 
     return `${baseUrl}${this.config.hubPath}`;

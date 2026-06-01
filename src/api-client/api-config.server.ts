@@ -11,7 +11,7 @@ import type { APIConfig, CreateAPIConfigOptions, GetAccessTokenFn, GetCurrentTen
  * Base URL Configuration
  * Single unified base URL for all API operations
  */
-const DEFAULT_API_BASE_URL = process.env.API_BASE_URL || 'https://localhost:5001';
+const DEFAULT_API_BASE_URL = process.env.API_BASE_URL || '';
 
 /**
  * Default Headers
@@ -42,6 +42,34 @@ export interface APIConfigFactoryOptions {
    * Default timeout in milliseconds
    */
   timeout?: number;
+  /**
+   * Header name used for bearer-style auth. Set to null when buildHeaders owns auth.
+   * @default 'Authorization'
+   */
+  authHeaderName?: string | null;
+  /**
+   * Build an auth header value from the resolved access token.
+   * @default token => `Bearer ${token}`
+   */
+  authHeaderValue?: (accessToken: string) => string;
+  /**
+   * Header name used for tenant context. Set to null when buildHeaders owns tenancy.
+   * @default 'X-Tenant-Id'
+   */
+  tenantHeaderName?: string | null;
+  /**
+   * Final app-specific header hook. Returned headers are merged last.
+   */
+  buildHeaders?: (context: APIHeaderStrategyContext) => Record<string, string>;
+}
+
+export interface APIHeaderStrategyContext {
+  request: Request;
+  options: CreateAPIConfigOptions;
+  accessToken?: string;
+  tenantId: string | null;
+  includeAuth: boolean;
+  requireTenant: boolean;
 }
 
 /**
@@ -59,8 +87,12 @@ export function createAPIConfigFactory(
   const {
     baseURL = DEFAULT_API_BASE_URL,
     defaultHeaders = DEFAULT_HEADERS,
-    userAgent = 'MimirCore/1.0',
+    userAgent = 'Spine/1.0',
     timeout = 30000,
+    authHeaderName = 'Authorization',
+    authHeaderValue = (token: string) => `Bearer ${token}`,
+    tenantHeaderName = 'X-Tenant-Id',
+    buildHeaders,
   } = factoryOptions;
 
   /**
@@ -93,9 +125,9 @@ export function createAPIConfigFactory(
    * Creates unified API configuration for all services.
    *
    * This function automatically:
-   * - Adds authentication token to Authorization header
-   * - Injects tenant context as X-Tenant-Id header
-   * - Configures base URL from environment
+   * - Adds authentication token using the configured auth header strategy
+   * - Injects tenant context using the configured tenant header strategy
+   * - Configures base URL from options or environment
    * - Applies default headers
    *
    * @param request - The incoming request object
@@ -144,7 +176,9 @@ export function createAPIConfigFactory(
       }
 
       accessToken = token;
-      headers.Authorization = `Bearer ${token}`;
+      if (authHeaderName) {
+        headers[authHeaderName] = authHeaderValue(token);
+      }
       logger?.debug?.('Added authorization header to API config');
     }
 
@@ -158,8 +192,21 @@ export function createAPIConfigFactory(
         throw new Error('Tenant context is required for this operation');
       }
 
-      headers['X-Tenant-Id'] = tenantId;
+      if (tenantHeaderName) {
+        headers[tenantHeaderName] = tenantId;
+      }
       logger?.debug?.('Added tenant context header', { tenantId });
+    }
+
+    if (buildHeaders) {
+      Object.assign(headers, buildHeaders({
+        request,
+        options,
+        accessToken,
+        tenantId,
+        includeAuth,
+        requireTenant,
+      }));
     }
 
     logger?.debug?.('API config created', {

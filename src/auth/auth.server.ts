@@ -43,6 +43,10 @@ import type {
 } from './types';
 import { logger } from '../logging';
 import { createRedirectResponse } from '../http/response';
+import {
+  buildAuthorizationState,
+  sanitizeExtraAuthorizationParameters,
+} from './authorization-parameters';
 
 type OidcTokenResponse = oidc.TokenEndpointResponse & oidc.TokenEndpointResponseHelpers;
 type LogoutScope = 'identity' | 'local' | 'all';
@@ -167,25 +171,6 @@ let authServerCache: {
 
 const CACHE_TTL = 60 * 60 * 1000; // 1 hour
 const jwksCache = new Map<string, ReturnType<typeof createRemoteJWKSet>>();
-const RESERVED_AUTHORIZATION_PARAMETER_NAMES = new Set([
-  'client_id',
-  'code_challenge',
-  'code_challenge_method',
-  'kc_action',
-  'nonce',
-  'prompt',
-  'redirect_uri',
-  'response_mode',
-  'response_type',
-  'scope',
-  'state',
-]);
-const ALLOWED_EXTRA_AUTHORIZATION_PARAMETER_NAMES = new Set([
-  'acr_values',
-  'kc_idp_hint',
-  'login_hint',
-  'ui_locales',
-]);
 
 function normalizeIssuer(value: string | undefined): string | null {
   const normalized = value?.trim().replace(/\/+$/, '');
@@ -318,78 +303,6 @@ function getDiscoveryOptions(): oidc.DiscoveryRequestOptions {
 
 function getClientMetadata(config: AuthConfig): string | undefined {
   return config.clientAuthMethod === 'none' ? undefined : config.clientSecret;
-}
-
-function sanitizeExtraAuthorizationParameters(
-  params: LoginOptions['extraAuthParams'] | undefined
-): Record<string, string> {
-  if (!params) {
-    return {};
-  }
-
-  const sanitized: Record<string, string> = {};
-
-  for (const [key, value] of Object.entries(params)) {
-    const normalizedKey = key.trim();
-    if (
-      normalizedKey.length === 0 ||
-      RESERVED_AUTHORIZATION_PARAMETER_NAMES.has(normalizedKey.toLowerCase()) ||
-      !isAllowedExtraAuthorizationParameter(normalizedKey) ||
-      value === null ||
-      value === undefined
-    ) {
-      continue;
-    }
-
-    const normalizedValue = String(value).trim();
-    if (normalizedValue.length === 0) {
-      continue;
-    }
-
-    sanitized[normalizedKey] = normalizedValue;
-  }
-
-  return sanitized;
-}
-
-function isAllowedExtraAuthorizationParameter(key: string): boolean {
-  const normalized = key.toLowerCase();
-  return (
-    ALLOWED_EXTRA_AUTHORIZATION_PARAMETER_NAMES.has(normalized) ||
-    normalized.startsWith('uf_')
-  );
-}
-
-function buildAuthorizationState(baseState: string, extraParams: Record<string, string>): string {
-  const uiContext = buildPublicAuthorizationUiContext(extraParams);
-  if (!uiContext) {
-    return baseState;
-  }
-
-  return `${baseState}.${Buffer.from(JSON.stringify(uiContext), 'utf8').toString('base64url')}`;
-}
-
-function buildPublicAuthorizationUiContext(
-  extraParams: Record<string, string>
-): Record<string, string> | null {
-  const inviteKind = extraParams.uf_invite;
-  if (inviteKind !== 'organization') {
-    return null;
-  }
-
-  const context: Record<string, string> = {
-    uf_invite: inviteKind,
-  };
-
-  if (extraParams.uf_invite_mode) {
-    context.uf_invite_mode = extraParams.uf_invite_mode;
-  }
-
-  if (extraParams.login_hint) {
-    context.login_hint = extraParams.login_hint;
-  }
-
-  return context;
 }
 
 function getClientAuthentication(config: AuthConfig): oidc.ClientAuth {
@@ -1065,12 +978,12 @@ export async function login(
     const codeVerifier = oidc.randomPKCECodeVerifier();
     const codeChallenge = await oidc.calculatePKCECodeChallenge(codeVerifier);
 
-    const extraAuthParams = sanitizeExtraAuthorizationParameters(options.extraAuthParams);
+    const extraAuthParams = sanitizeExtraAuthorizationParameters(options.extraAuthParams, options);
 
     // Generate secure state and nonce. The state may carry a non-secret UI
     // hint for Keycloak themes, but callback validation still compares the
     // exact value stored server-side.
-    const state = buildAuthorizationState(oidc.randomState(), extraAuthParams);
+    const state = buildAuthorizationState(oidc.randomState(), options.publicStateContext);
     const nonce = oidc.randomNonce();
 
     // Create OAuth state object

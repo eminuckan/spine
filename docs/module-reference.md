@@ -26,7 +26,12 @@ Key exports:
 - `resetAuthClaimMapping`
 - `configureRouteProtection`
 - `authRoute`
+- `protectedRoute`
+- `policyRoute`
 - `publicRoute`
+
+Deprecated compatibility aliases:
+
 - `onboardingRoute`
 - `subscriptionRoute`
 
@@ -45,11 +50,24 @@ Key client exports:
 - `TenantProvider`
 - `useTenant`
 - `useCurrentTenant`
-- `useCurrentOrganization`
-- `useOrganization`
+- `useCurrentTenantData`
+- `useTenantData`
 - `useTenantStore`
 - `initializeTenantStore`
+- `configureTenantClient`
 - `configureTenantEndpoints`
+- `resetTenantClientConfig`
+- `normalizeTenantDataPayload`
+- `normalizeTenantSwitchPayload`
+- `TenantData`
+- `TenantBranding`
+
+Deprecated compatibility aliases:
+
+- `useCurrentOrganization`
+- `useOrganization`
+- `OrganizationData`
+- `OrganizationBranding`
 
 Key server exports:
 
@@ -58,6 +76,8 @@ Key server exports:
 - `getActiveTenant`
 - `setActiveTenant`
 - `clearActiveTenant`
+- `configureTenantResolution`
+- `resetTenantResolutionConfig`
 - `configureIdentityContextFetcher`
 - `getCurrentTenant`
 - `getAvailableTenants`
@@ -86,6 +106,9 @@ Key client exports:
 - `useUserPermissions`
 - `configureIdentityStore`
 - `configureIdentityEndpoints`
+- `resetIdentityStoreConfig`
+- `normalizeIdentityContextPayload`
+- `normalizeIdentityPermissionsPayload`
 
 Key server exports:
 
@@ -151,6 +174,8 @@ Key server exports:
 - `createAPIConfigFactory`
 - `createFetchMiddleware`
 - `createApiClient`
+- `APIConfigFactoryOptions`
+- `APIHeaderStrategyContext`
 
 ## Query Client
 

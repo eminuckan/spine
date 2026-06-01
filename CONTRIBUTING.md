@@ -15,9 +15,7 @@ Spine is intended to be a reusable foundation for SaaS infrastructure, so change
 
 ```bash
 pnpm install
-pnpm typecheck
-pnpm build
-pnpm lint
+pnpm check
 ```
 
 ## Project Structure
@@ -56,12 +54,11 @@ Examples:
 
 - Good for core: token refresh, tenant cookie utilities, permission checks, identity caching
 - Good for adapters: framework-specific redirects, loader wrappers, request helpers
-- Good for apps: onboarding redirects, subscription gating, domain permission constants
+- Good for apps: setup redirects, entitlement gating, domain permission constants
 
 ## Pull Request Checklist
 
-- `pnpm typecheck` passes
-- `pnpm build` passes
+- `pnpm check` passes
 - Public API changes are documented
 - Changelog is updated when needed
 - No product-specific behavior leaked into core without a configuration escape hatch

@@ -21,7 +21,7 @@ interface PermissionState {
 }
 
 /**
- * Selectors for selective subscription
+ * Selectors for focused store reads
  */
 export const selectChecker = (state: PermissionState) => state.checker;
 export const selectPermissions = (state: PermissionState) => state.permissions;

@@ -1,7 +1,8 @@
 /**
  * Error Codes
  * 
- * Standard error codes from backend.
+ * Generic error codes that apps can use as a starter vocabulary.
+ * Domain-specific codes should live in the consuming app.
  */
 
 export const ErrorCodes = {
@@ -22,36 +23,12 @@ export const ErrorCodes = {
     EmailAlreadyExists: 'EmailAlreadyExists',
   },
 
-  // Accounting
-  Accounting: {
-    OpeningBalanceLockedReconciliation: 'OpeningBalanceLockedReconciliation',
-    OpeningBalanceLockedJournal: 'OpeningBalanceLockedJournal',
-    SystemLocked: 'SystemLocked',
-    AccountsDuplicate: 'AccountsDuplicate',
-    AccountNotFound: 'AccountNotFound',
-  },
-
-  // Subscription
-  Subscription: {
-    SubscriptionRequired: 'SubscriptionRequired',
-    SubscriptionExpired: 'SubscriptionExpired',
+  // Access and entitlement
+  Access: {
+    EntitlementRequired: 'EntitlementRequired',
+    EntitlementExpired: 'EntitlementExpired',
     FeatureNotAvailable: 'FeatureNotAvailable',
-  },
-
-  // Property Management
-  PropertyManagement: {
-    PropertyNotFound: 'PropertyNotFound',
-    UnitNotFound: 'UnitNotFound',
-    DuplicateProperty: 'DuplicateProperty',
-    DuplicateUnit: 'DuplicateUnit',
-  },
-
-  // Leasing
-  Leasing: {
-    LeaseNotFound: 'LeaseNotFound',
-    LeaseConflict: 'LeaseConflict',
-    TenantNotFound: 'TenantNotFound',
-    LateFeeValidationError: 'LateFeeValidationError',
+    TenantContextMissing: 'TenantContextMissing',
   },
 
   // General
@@ -60,17 +37,3 @@ export const ErrorCodes = {
   Forbidden: 'Forbidden',
   InternalError: 'InternalError',
 } as const;
-
-/**
- * Check if error code is from PropertyManagement module
- */
-export function isPropertyManagementError(code: string): boolean {
-  return Object.values(ErrorCodes.PropertyManagement).includes(code as any);
-}
-
-/**
- * Check if error code is from Leasing module
- */
-export function isLeasingError(code: string): boolean {
-  return Object.values(ErrorCodes.Leasing).includes(code as any);
-}

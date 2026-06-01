@@ -10,15 +10,7 @@ export type PermissionCode = string;
 /**
  * Permission module types
  */
-export type PermissionModule =
-  | 'Identity'
-  | 'PropertyManagement'
-  | 'Leasing'
-  | 'Accounting'
-  | 'Tasks'
-  | 'People'
-  | 'Organization'
-  | 'Subscription';
+export type PermissionModule = string;
 
 /**
  * Permission check options

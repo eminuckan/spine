@@ -12,6 +12,7 @@ export {
   createAPIConfigFactory,
   type APIConfigFactory,
   type APIConfigFactoryOptions,
+  type APIHeaderStrategyContext,
 } from './api-config.server';
 
 // Fetch-native client setup (server-only)

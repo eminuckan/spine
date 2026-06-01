@@ -187,14 +187,22 @@ export interface TokenRefreshResult {
  */
 export type ProtectionLevel = 
   | 'public' 
-  | 'auth' 
-  | 'onboarding-required' 
+  | 'auth'
+  | 'policy'
+  /** @deprecated Use policy with configureRouteProtection instead. */
+  | 'onboarding-required'
+  /** @deprecated Use policy with configureRouteProtection instead. */
   | 'subscription-required';
 
 /**
  * Protected route loader function type
  */
 export type ProtectedLoaderFn<T> = (user?: UserInfo) => Promise<T> | T;
+
+export type PublicAuthorizationStateContext = Record<
+  string,
+  string | number | boolean | null | undefined
+>;
 
 /**
  * Login options
@@ -208,12 +216,29 @@ export interface LoginOptions {
    * Additional authorization request parameters.
    *
    * Use this for safe provider hints: `login_hint`, `ui_locales`,
-   * `acr_values`, `kc_idp_hint`, or custom `uf_` theme context parameters.
+   * `acr_values`, `kc_idp_hint`, or app-specific provider hints allowed by
+   * `extraAuthParamNames` / `extraAuthParamPrefixes`.
    * Security-sensitive protocol parameters such as state, nonce, redirect_uri,
    * scope, PKCE, prompt, and kc_action are managed by Spine and cannot be
    * overridden.
    */
   extraAuthParams?: Record<string, string | number | boolean | null | undefined>;
+  /**
+   * Additional non-sensitive authorization parameter names allowed for this
+   * login request. Use this for app-specific identity-provider theme hints.
+   */
+  extraAuthParamNames?: string[];
+  /**
+   * Additional non-sensitive authorization parameter prefixes allowed for this
+   * login request. Prefixes should be narrow and app-owned.
+   */
+  extraAuthParamPrefixes?: string[];
+  /**
+   * Optional public, non-secret UI context appended to the OAuth state value.
+   * This exists for identity-provider themes that need display hints while the
+   * server still validates the full exact state value during callback handling.
+   */
+  publicStateContext?: PublicAuthorizationStateContext;
   /**
    * Keycloak application initiated action.
    *

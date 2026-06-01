@@ -48,7 +48,7 @@ export async function fetchIdentityContext(request: Request): Promise<IdentityCo
     
     logger.debug('Identity context fetched', {
       hasAnyMembership: context.hasAnyMembership,
-      hasSubscription: context.hasSubscription,
+      hasEntitlement: context.hasEntitlement ?? context.hasSubscription,
       isOnboarded: context.isOnboarded,
       membershipCount: context.memberships?.length || 0,
     });
@@ -155,6 +155,8 @@ export interface UserContextInfo {
   currentTenant?: string;
   isOnboarded: boolean;
   permissions: string[];
+  hasEntitlement: boolean;
+  /** @deprecated Use hasEntitlement or app-specific fields instead. */
   hasSubscription: boolean;
   userId?: string;
   email?: string;
@@ -198,7 +200,8 @@ export async function contextToUserInfo(
     currentTenant: resolvedCurrentTenant,
     isOnboarded: context.isOnboarded ?? false,
     permissions,
-    hasSubscription: context.hasSubscription ?? false,
+    hasEntitlement: context.hasEntitlement ?? context.hasSubscription ?? false,
+    hasSubscription: context.hasSubscription ?? context.hasEntitlement ?? false,
     userId: context.userId,
     email: context.email,
     firstName: context.firstName,

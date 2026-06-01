@@ -105,6 +105,8 @@ async function autoRefreshTokens(request: Request): Promise<void> {
  */
 export interface DefaultRouteIdentityContext {
   hasAnyMembership: boolean;
+  hasEntitlement?: boolean;
+  /** @deprecated Use hasEntitlement or app-specific fields instead. */
   hasSubscription: boolean;
   isOnboarded: boolean;
 }
@@ -126,7 +128,9 @@ export interface TenantChecker {
 }
 
 /**
- * Subscription checker configuration
+ * Legacy subscription checker configuration
+ *
+ * @deprecated Put entitlement policy in resolveRoute or app-level route loaders.
  */
 export interface SubscriptionChecker {
   checkTenantSubscriptionStatus: (request: Request, tenantId: string) => Promise<boolean>;
@@ -186,7 +190,7 @@ export interface RouteProtectionConfig<TIdentityContext = DefaultRouteIdentityCo
 let protectionConfig: RouteProtectionConfig<any> = {};
 
 /**
- * Configure route protection with identity/tenant/subscription checkers
+ * Configure route protection with identity, tenant, and app policy checkers
  */
 export function configureRouteProtection<TIdentityContext = DefaultRouteIdentityContext>(
   config: RouteProtectionConfig<TIdentityContext>
@@ -223,11 +227,8 @@ function getLoginReturnUrl(
 
   switch (protection) {
     case 'onboarding-required':
-      return '/onboarding';
     case 'subscription-required':
-      return '/subscription';
     case 'public':
-      return '/';
     case 'auth':
     default: {
       const url = new URL(request.url);
@@ -350,94 +351,6 @@ async function applyConfiguredRouteResolution(
 }
 
 /**
- * Check user status (onboarding, subscription)
- */
-async function checkUserStatus(
-  request: Request, 
-  user: UserInfo, 
-  currentPath: string
-): Promise<Response | null> {
-  if (!protectionConfig.identityChecker) {
-    logger.warn('Identity checker not configured, skipping status check');
-    return null;
-  }
-
-  try {
-    const context = await protectionConfig.identityChecker.getIdentityContext(request, user.sub);
-
-    logger.debug('User status check', {
-      userId: user.sub,
-      currentPath,
-      hasAnyMembership: context.hasAnyMembership,
-      isOnboarded: context.isOnboarded,
-      hasSubscription: context.hasSubscription,
-    });
-
-    // Check if user needs onboarding
-    if (!context.hasAnyMembership) {
-      if (currentPath !== '/onboarding') {
-        logger.info('User has no memberships, redirecting to onboarding');
-        throw createRedirectResponse('/onboarding');
-      }
-      return null;
-    }
-
-    // Check subscription status
-    if (context.hasAnyMembership) {
-      if (currentPath === '/onboarding') {
-        logger.info('User has memberships, redirecting from onboarding to subscription');
-        throw createRedirectResponse('/subscription');
-      }
-
-      if (currentPath === '/subscription') {
-        return null;
-      }
-
-      // Check tenant subscription
-      if (protectionConfig.tenantChecker && protectionConfig.subscriptionChecker) {
-        let currentTenant = await protectionConfig.tenantChecker.getCurrentTenant(request);
-
-        if (!currentTenant) {
-          const initResult = await protectionConfig.tenantChecker.initializeTenant(request);
-          if (initResult) {
-            currentTenant = initResult.tenantId;
-          }
-        }
-
-        if (currentTenant) {
-          const hasSubscription = await protectionConfig.subscriptionChecker.checkTenantSubscriptionStatus(
-            request,
-            currentTenant
-          );
-
-          if (!hasSubscription) {
-            logger.info('Tenant has no subscription, redirecting to subscription');
-            throw createRedirectResponse('/subscription');
-          }
-        } else {
-          logger.info('Could not initialize tenant, redirecting to subscription');
-          throw createRedirectResponse('/subscription');
-        }
-      }
-    }
-
-    return null;
-  } catch (error) {
-    if (error instanceof Response && error.status >= 300 && error.status < 400) {
-      throw error;
-    }
-
-    logger.error('Error checking user status', error instanceof Error ? error : undefined);
-
-    if (currentPath !== '/onboarding') {
-      throw createRedirectResponse('/onboarding');
-    }
-
-    return null;
-  }
-}
-
-/**
  * Main route protection function
  */
 export async function protectRoute<T>(
@@ -458,19 +371,17 @@ export async function protectRoute<T>(
       }
 
     case 'auth':
+    case 'policy':
       try {
         await autoRefreshTokens(request);
         const user = await requireAuth(request);
-        const handledByConfig = await applyConfiguredRouteResolution(request, user, url.pathname, 'auth');
-        if (!handledByConfig) {
-          await checkUserStatus(request, user, url.pathname);
-        }
+        await applyConfiguredRouteResolution(request, user, url.pathname, protection);
         return loaderFn(user);
       } catch (error) {
         if (error instanceof Response && error.status >= 300 && error.status < 400) {
           throw error;
         }
-        throw await login(request, getLoginReturnUrl(request, url.pathname, 'auth'));
+        throw await login(request, getLoginReturnUrl(request, url.pathname, protection));
       }
 
     case 'onboarding-required':
@@ -478,18 +389,12 @@ export async function protectRoute<T>(
         await autoRefreshTokens(request);
         const user = await requireAuth(request);
 
-        const handledByConfig = await applyConfiguredRouteResolution(
+        await applyConfiguredRouteResolution(
           request,
           user,
           url.pathname,
           'onboarding-required'
         );
-        if (!handledByConfig && protectionConfig.identityChecker) {
-          const context = await protectionConfig.identityChecker.getIdentityContext(request, user.sub);
-          if (context.hasAnyMembership) {
-            throw createRedirectResponse('/subscription');
-          }
-        }
 
         return loaderFn(user);
       } catch (error) {
@@ -504,18 +409,12 @@ export async function protectRoute<T>(
         await autoRefreshTokens(request);
         const user = await requireAuth(request);
 
-        const handledByConfig = await applyConfiguredRouteResolution(
+        await applyConfiguredRouteResolution(
           request,
           user,
           url.pathname,
           'subscription-required'
         );
-        if (!handledByConfig && protectionConfig.identityChecker) {
-          const context = await protectionConfig.identityChecker.getIdentityContext(request, user.sub);
-          if (!context.hasAnyMembership) {
-            throw createRedirectResponse('/onboarding');
-          }
-        }
 
         // Initialize tenant if needed
         if (protectionConfig.tenantChecker) {
@@ -559,7 +458,22 @@ export const authRoute = <T>(
 ) => protectRoute(request, 'auth', loaderFn as (user?: UserInfo) => Promise<T> | T);
 
 /**
- * Onboarding route
+ * Generic policy-protected route. Apps define policy in configureRouteProtection.
+ */
+export const policyRoute = <T>(
+  request: Request,
+  loaderFn: (user: UserInfo) => Promise<T> | T
+) => protectRoute(request, 'policy', loaderFn as (user?: UserInfo) => Promise<T> | T);
+
+/**
+ * Alias for auth-protected routes.
+ */
+export const protectedRoute = authRoute;
+
+/**
+ * Setup policy route
+ *
+ * @deprecated Use policyRoute with configureRouteProtection instead.
  */
 export const onboardingRoute = <T>(
   request: Request,
@@ -567,7 +481,9 @@ export const onboardingRoute = <T>(
 ) => protectRoute(request, 'onboarding-required', loaderFn as (user?: UserInfo) => Promise<T> | T);
 
 /**
- * Subscription route
+ * Entitlement policy route
+ *
+ * @deprecated Use policyRoute with configureRouteProtection instead.
  */
 export const subscriptionRoute = <T>(
   request: Request,
