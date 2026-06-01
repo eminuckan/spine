@@ -12,7 +12,11 @@ This is the maintainer-facing application packet for the Codex for Open Source p
 
 ## Qualification Draft
 
-Spine is an MIT SaaS frontend infrastructure library for auth, identity, tenancy, permissions, API access, realtime clients, and framework adapters. It is extracted from repeated production-facing SaaS frontend needs, has a published npm package, docs, tests, CI, and an example app, and is being maintained as a reusable OSS foundation.
+Spine is an MIT SaaS frontend infrastructure library for auth, identity, tenancy, permissions, API access, realtime clients, and framework adapters. It is extracted from repeated production-facing SaaS frontend needs, has a published npm package, docs, tests, CI, and an example app, and is maintained as reusable OSS.
+
+## Ecosystem Importance Draft
+
+Agentic coding is making SaaS apps faster to build, but agents still spend context rebuilding auth, tenancy, permissions, API, query, and realtime plumbing. Spine gives humans and coding agents a typed, well-documented substrate they can install and compose instead of re-deriving the same infrastructure in every app.
 
 ## API Credit Use Draft
 
@@ -20,7 +24,7 @@ Use Codex for core OSS maintenance: PR review, issue triage, release checklist a
 
 ## Anything Else Draft
 
-Spine is early-stage but solves a common repeated SaaS problem: teams copy auth, tenant, permission, API, query, and realtime infrastructure between apps. The project has been rebooted as independent OSS with generic contracts, public docs, tests, issue templates, roadmap, and a maintenance plan for Codex-assisted review and release work.
+Spine is early-stage, but it solves a common repeated SaaS problem and is especially useful in agentic development workflows. Its goal is to make the reusable infrastructure layer easy for both humans and AI coding agents to understand, install, and extend safely, while keeping product policy in each consuming app.
 
 ## Evidence To Refresh Before Submission
 
