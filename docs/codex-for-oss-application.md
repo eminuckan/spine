@@ -26,6 +26,10 @@ Agentic coding is making SaaS apps faster to build, but agents still spend conte
 
 Use Codex for core OSS maintenance: PR review, issue triage, release checklist automation, security review of auth/session code, docs drift checks, adapter scaffolding for Next.js/Clerk/Supabase, and regression repair. All changes remain maintainer-reviewed and must pass `pnpm check`.
 
+## Program Support Impact Draft
+
+Spine is actively developed and still early. Six months of ChatGPT Pro with Codex would directly increase maintainer capacity for OSS work: more adapter coverage, stronger tests, better docs, faster issue triage, and safer auth/session reviews. That support would help turn Spine into a more capable, reliable SaaS package for the open source ecosystem.
+
 ## Anything Else Draft
 
 Spine is early-stage, but it solves a common repeated SaaS problem and is especially useful in agentic development workflows. Its goal is to make the reusable infrastructure layer easy for both humans and AI coding agents to understand, install, and extend safely, while keeping product policy in each consuming app.
